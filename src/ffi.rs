@@ -1,30 +1,38 @@
-//! C FFI: flat arrays in, activation scores out.
-//!
-//! floop consumes this via CGO. All pointers are borrowed for the duration
-//! of each call — the caller owns the memory.
+use std::collections::HashSet;
 
-use crate::engine::{ActivationResult, Config, Engine, Seed};
+use crate::engine::{Engine, PropagationConfig};
 use crate::graph::{CsrGraph, EdgeInput, EdgeKind};
+use crate::hebbian::{
+    CoActivationPair, HebbianConfig, Learner, OjaLearner, extract_co_activation_pairs,
+};
 use crate::inhibition::InhibitionConfig;
-use std::slice;
+use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId, Seed};
 
-/// Opaque handle to a built CSR graph.
 pub struct SproinkGraph {
     inner: CsrGraph,
 }
 
-/// Opaque handle to activation results.
 pub struct SproinkResults {
     results: Vec<ActivationResult>,
 }
 
-/// Build a CSR graph from flat arrays.
-///
-/// # Safety
-/// - `sources`, `targets` must point to `num_edges` elements.
-/// - `weights` must point to `num_edges` elements.
-/// - `kinds` must point to `num_edges` elements (0=Positive, 1=Conflicts,
-///    2=DirectionalSuppressive, 3=FeatureAffinity).
+pub struct SproinkPairs {
+    pairs: Vec<CoActivationPair>,
+}
+
+fn edge_kind_from_u8(v: u8) -> EdgeKind {
+    match v {
+        0 => EdgeKind::Positive,
+        1 => EdgeKind::Conflicts,
+        2 => EdgeKind::DirectionalSuppressive,
+        // 3 = DirectionalPassive: not accepted at FFI boundary, default to Positive
+        4 => EdgeKind::FeatureAffinity,
+        _ => EdgeKind::Positive,
+    }
+}
+
+// --- Graph ---
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_graph_build(
     num_nodes: u32,
@@ -34,35 +42,36 @@ pub unsafe extern "C" fn sproink_graph_build(
     weights: *const f64,
     kinds: *const u8,
 ) -> *mut SproinkGraph {
-    let n = num_edges as usize;
-    let sources = unsafe { slice::from_raw_parts(sources, n) };
-    let targets = unsafe { slice::from_raw_parts(targets, n) };
-    let weights = unsafe { slice::from_raw_parts(weights, n) };
-    let kinds = unsafe { slice::from_raw_parts(kinds, n) };
+    if sources.is_null() || targets.is_null() || weights.is_null() || kinds.is_null() {
+        return std::ptr::null_mut();
+    }
 
-    let inputs: Vec<EdgeInput> = (0..n)
-        .map(|i| EdgeInput {
-            source: sources[i],
-            target: targets[i],
-            weight: weights[i],
-            kind: match kinds[i] {
-                1 => EdgeKind::Conflicts,
-                2 => EdgeKind::DirectionalSuppressive,
-                // 3 = DirectionalPassive (internal only, not expected from FFI)
-                4 => EdgeKind::FeatureAffinity,
-                _ => EdgeKind::Positive,
-            },
-        })
-        .collect();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let n = num_edges as usize;
+        let sources = unsafe { std::slice::from_raw_parts(sources, n) };
+        let targets = unsafe { std::slice::from_raw_parts(targets, n) };
+        let weights = unsafe { std::slice::from_raw_parts(weights, n) };
+        let kinds = unsafe { std::slice::from_raw_parts(kinds, n) };
 
-    let graph = CsrGraph::build(num_nodes, &inputs);
-    Box::into_raw(Box::new(SproinkGraph { inner: graph }))
+        let mut edges = Vec::with_capacity(n);
+        for i in 0..n {
+            let w = weights[i].clamp(0.0, 1.0);
+            edges.push(EdgeInput {
+                source: NodeId(sources[i]),
+                target: NodeId(targets[i]),
+                weight: EdgeWeight::new_unchecked(w),
+                kind: edge_kind_from_u8(kinds[i]),
+            });
+        }
+
+        let graph = CsrGraph::build(num_nodes, edges);
+        Box::into_raw(Box::new(SproinkGraph { inner: graph }))
+    })) {
+        Ok(ptr) => ptr,
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
-/// Free a graph handle.
-///
-/// # Safety
-/// `graph` must be a valid pointer from `sproink_graph_build`, and must not be used after this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
     if !graph.is_null() {
@@ -70,20 +79,14 @@ pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
     }
 }
 
-/// Run spreading activation.
-///
-/// # Safety
-/// - `graph` must be a valid pointer from `sproink_graph_build`.
-/// - `seed_nodes` and `seed_activations` must point to `num_seeds` elements.
-///
-/// Returns a results handle. Caller must free with `sproink_results_free`.
+// --- Activation ---
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_activate(
     graph: *const SproinkGraph,
     num_seeds: u32,
     seed_nodes: *const u32,
     seed_activations: *const f64,
-    // Config params — flat for CGO simplicity.
     max_steps: u32,
     decay_factor: f64,
     spread_factor: f64,
@@ -94,103 +97,116 @@ pub unsafe extern "C" fn sproink_activate(
     inhibition_strength: f64,
     inhibition_breadth: u32,
 ) -> *mut SproinkResults {
-    let graph = unsafe { &(*graph).inner };
-    let ns = num_seeds as usize;
-    let nodes = unsafe { slice::from_raw_parts(seed_nodes, ns) };
-    let acts = unsafe { slice::from_raw_parts(seed_activations, ns) };
+    if graph.is_null() {
+        return std::ptr::null_mut();
+    }
 
-    let seeds: Vec<Seed> = (0..ns)
-        .map(|i| Seed {
-            node: nodes[i],
-            activation: acts[i],
-        })
-        .collect();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let graph_ref = unsafe { &(*graph).inner };
+        let n = num_seeds as usize;
 
-    let config = Config {
-        max_steps,
-        decay_factor,
-        spread_factor,
-        min_activation,
-        sigmoid_gain,
-        sigmoid_center,
-        inhibition: if inhibition_enabled {
-            Some(InhibitionConfig {
-                strength: inhibition_strength,
-                breadth: inhibition_breadth as usize,
-                enabled: true,
-            })
+        let seeds: Vec<Seed> = if n > 0 && !seed_nodes.is_null() && !seed_activations.is_null() {
+            let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, n) };
+            let acts = unsafe { std::slice::from_raw_parts(seed_activations, n) };
+            nodes
+                .iter()
+                .zip(acts.iter())
+                .map(|(&node, &act)| Seed {
+                    node: NodeId(node),
+                    activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
+                })
+                .collect()
         } else {
-            None
-        },
-    };
+            vec![]
+        };
 
-    let engine = Engine::new(graph, config);
-    let results = engine.activate(&seeds);
+        let inhibition = InhibitionConfig::builder()
+            .strength(inhibition_strength)
+            .breadth(inhibition_breadth as usize)
+            .enabled(inhibition_enabled)
+            .build();
 
-    Box::into_raw(Box::new(SproinkResults { results }))
-}
+        let config = PropagationConfig::builder()
+            .max_steps(max_steps)
+            .decay_factor(decay_factor)
+            .spread_factor(spread_factor)
+            .min_activation(min_activation)
+            .sigmoid_gain(sigmoid_gain)
+            .sigmoid_center(sigmoid_center)
+            .inhibition(inhibition)
+            .build();
 
-/// Get the number of results.
-///
-/// # Safety
-/// `results` must be a valid pointer from `sproink_activate`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sproink_results_len(results: *const SproinkResults) -> u32 {
-    unsafe { (*results).results.len() as u32 }
-}
+        let engine = Engine::new(graph_ref);
+        let results = engine.activate(&seeds, &config);
 
-/// Copy result node IDs into caller-owned buffer.
-///
-/// # Safety
-/// - `results` must be valid.
-/// - `out_nodes` must point to at least `sproink_results_len()` elements.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, out_nodes: *mut u32) {
-    let r = unsafe { &(*results).results };
-    let out = unsafe { slice::from_raw_parts_mut(out_nodes, r.len()) };
-    for (i, res) in r.iter().enumerate() {
-        out[i] = res.node;
+        Box::into_raw(Box::new(SproinkResults { results }))
+    })) {
+        Ok(ptr) => ptr,
+        Err(_) => std::ptr::null_mut(),
     }
 }
 
-/// Copy result activations into caller-owned buffer.
-///
-/// # Safety
-/// - `results` must be valid.
-/// - `out_activations` must point to at least `sproink_results_len()` elements.
+// --- Results ---
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_results_len(results: *const SproinkResults) -> u32 {
+    if results.is_null() {
+        return 0;
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { &*results }.results.len() as u32
+    }))
+    .unwrap_or_default()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, out: *mut u32) {
+    if results.is_null() || out.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let r = unsafe { &*results };
+        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
+        for (i, result) in r.results.iter().enumerate() {
+            out[i] = result.node.get();
+        }
+    }));
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_activations(
     results: *const SproinkResults,
-    out_activations: *mut f64,
+    out: *mut f64,
 ) {
-    let r = unsafe { &(*results).results };
-    let out = unsafe { slice::from_raw_parts_mut(out_activations, r.len()) };
-    for (i, res) in r.iter().enumerate() {
-        out[i] = res.activation;
+    if results.is_null() || out.is_null() {
+        return;
     }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let r = unsafe { &*results };
+        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
+        for (i, result) in r.results.iter().enumerate() {
+            out[i] = result.activation.get();
+        }
+    }));
 }
 
-/// Copy result distances into caller-owned buffer.
-///
-/// # Safety
-/// - `results` must be valid.
-/// - `out_distances` must point to at least `sproink_results_len()` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_distances(
     results: *const SproinkResults,
-    out_distances: *mut u32,
+    out: *mut u32,
 ) {
-    let r = unsafe { &(*results).results };
-    let out = unsafe { slice::from_raw_parts_mut(out_distances, r.len()) };
-    for (i, res) in r.iter().enumerate() {
-        out[i] = res.distance;
+    if results.is_null() || out.is_null() {
+        return;
     }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let r = unsafe { &*results };
+        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
+        for (i, result) in r.results.iter().enumerate() {
+            out[i] = result.distance;
+        }
+    }));
 }
 
-/// Free a results handle.
-///
-/// # Safety
-/// `results` must be a valid pointer from `sproink_activate`, and must not be used after.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_free(results: *mut SproinkResults) {
     if !results.is_null() {
@@ -198,9 +214,103 @@ pub unsafe extern "C" fn sproink_results_free(results: *mut SproinkResults) {
     }
 }
 
-/// Compute Oja weight update (pure function, no handle needed).
+// --- Co-Activation Pairs ---
+
 #[unsafe(no_mangle)]
-pub extern "C" fn sproink_oja_update(
+pub unsafe extern "C" fn sproink_extract_pairs(
+    results: *const SproinkResults,
+    num_seeds: u32,
+    seed_nodes: *const u32,
+    activation_threshold: f64,
+) -> *mut SproinkPairs {
+    if results.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let r = unsafe { &*results };
+
+        let seeds: HashSet<NodeId> = if num_seeds > 0 && !seed_nodes.is_null() {
+            let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, num_seeds as usize) };
+            nodes.iter().map(|&n| NodeId(n)).collect()
+        } else {
+            HashSet::new()
+        };
+
+        let config = HebbianConfig::builder()
+            .activation_threshold(activation_threshold)
+            .build();
+
+        let pairs = extract_co_activation_pairs(&r.results, &seeds, &config);
+        Box::into_raw(Box::new(SproinkPairs { pairs }))
+    })) {
+        Ok(ptr) => ptr,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_pairs_len(pairs: *const SproinkPairs) -> u32 {
+    if pairs.is_null() {
+        return 0;
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { &*pairs }.pairs.len() as u32
+    }))
+    .unwrap_or_default()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_pairs_nodes(
+    pairs: *const SproinkPairs,
+    out_a: *mut u32,
+    out_b: *mut u32,
+) {
+    if pairs.is_null() || out_a.is_null() || out_b.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let p = unsafe { &*pairs };
+        let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
+        let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
+        for (i, pair) in p.pairs.iter().enumerate() {
+            out_a[i] = pair.node_a.get();
+            out_b[i] = pair.node_b.get();
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_pairs_activations(
+    pairs: *const SproinkPairs,
+    out_a: *mut f64,
+    out_b: *mut f64,
+) {
+    if pairs.is_null() || out_a.is_null() || out_b.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let p = unsafe { &*pairs };
+        let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
+        let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
+        for (i, pair) in p.pairs.iter().enumerate() {
+            out_a[i] = pair.activation_a.get();
+            out_b[i] = pair.activation_b.get();
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_pairs_free(pairs: *mut SproinkPairs) {
+    if !pairs.is_null() {
+        drop(unsafe { Box::from_raw(pairs) });
+    }
+}
+
+// --- Learning ---
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sproink_oja_update(
     current_weight: f64,
     activation_a: f64,
     activation_b: f64,
@@ -208,11 +318,18 @@ pub extern "C" fn sproink_oja_update(
     min_weight: f64,
     max_weight: f64,
 ) -> f64 {
-    let cfg = crate::hebbian::HebbianConfig {
-        learning_rate,
-        min_weight,
-        max_weight,
-        activation_threshold: 0.0, // not used by oja_update
-    };
-    crate::hebbian::oja_update(current_weight, activation_a, activation_b, &cfg)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let w = EdgeWeight::new_unchecked(current_weight.clamp(0.0, 1.0));
+        let a = Activation::new_unchecked(activation_a.clamp(0.0, 1.0));
+        let b = Activation::new_unchecked(activation_b.clamp(0.0, 1.0));
+        let config = HebbianConfig::builder()
+            .learning_rate(learning_rate)
+            .min_weight(min_weight)
+            .max_weight(max_weight)
+            .build();
+        OjaLearner.update_weight(w, a, b, &config).get()
+    })) {
+        Ok(v) => v,
+        Err(_) => min_weight,
+    }
 }

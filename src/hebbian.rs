@@ -1,99 +1,96 @@
-//! Oja-stabilized Hebbian co-activation learning.
+use std::collections::HashSet;
+use typed_builder::TypedBuilder;
 
-/// Configuration for Oja's rule weight updates.
-#[derive(Debug, Clone)]
+use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId};
+
+#[derive(Debug, Clone, TypedBuilder)]
 pub struct HebbianConfig {
-    /// Learning rate (eta). Default: 0.05.
+    #[builder(default = 0.05)]
     pub learning_rate: f64,
-    /// Floor for edge weights. Default: 0.01.
+    #[builder(default = 0.01)]
     pub min_weight: f64,
-    /// Ceiling for edge weights. Default: 0.95.
+    #[builder(default = 0.95)]
     pub max_weight: f64,
-    /// Minimum activation to qualify for co-activation. Default: 0.15.
+    #[builder(default = 0.15)]
     pub activation_threshold: f64,
 }
 
-impl Default for HebbianConfig {
-    fn default() -> Self {
-        HebbianConfig {
-            learning_rate: 0.05,
-            min_weight: 0.01,
-            max_weight: 0.95,
-            activation_threshold: 0.15,
-        }
+pub struct CoActivationPair {
+    pub node_a: NodeId,
+    pub node_b: NodeId,
+    pub activation_a: Activation,
+    pub activation_b: Activation,
+}
+
+pub trait Learner: Send + Sync {
+    fn update_weight(
+        &self,
+        current_weight: EdgeWeight,
+        activation_a: Activation,
+        activation_b: Activation,
+        config: &HebbianConfig,
+    ) -> EdgeWeight;
+}
+
+pub struct OjaLearner;
+
+impl Learner for OjaLearner {
+    fn update_weight(
+        &self,
+        current_weight: EdgeWeight,
+        activation_a: Activation,
+        activation_b: Activation,
+        config: &HebbianConfig,
+    ) -> EdgeWeight {
+        let w = current_weight.get();
+        let a_i = activation_a.get();
+        let a_j = activation_b.get();
+        let eta = config.learning_rate;
+
+        let dw = eta * (a_i * a_j - a_j * a_j * w);
+        let new_w = w + dw;
+
+        // NaN/Inf safety: fall back to min_weight
+        let new_w = if new_w.is_finite() {
+            new_w.clamp(config.min_weight, config.max_weight)
+        } else {
+            config.min_weight
+        };
+
+        EdgeWeight::new_unchecked(new_w)
     }
 }
 
-/// A co-activated pair of nodes.
-#[derive(Debug, Clone)]
-pub struct CoActivationPair {
-    pub node_a: u32,
-    pub node_b: u32,
-    pub activation_a: f64,
-    pub activation_b: f64,
-}
-
-/// Compute new edge weight using Oja's rule.
-///
-/// dW = eta * (A_i * A_j - A_j^2 * W)
-///
-/// The A_j^2 * W forgetting factor prevents unbounded weight growth.
-/// Result is clamped to [min_weight, max_weight].
-pub fn oja_update(current_weight: f64, activation_a: f64, activation_b: f64, cfg: &HebbianConfig) -> f64 {
-    let hebbian = activation_a * activation_b;
-    let forgetting = activation_b * activation_b * current_weight;
-    let dw = cfg.learning_rate * (hebbian - forgetting);
-
-    let new_weight = current_weight + dw;
-    clamp_weight(new_weight, cfg.min_weight, cfg.max_weight)
-}
-
-/// Extract co-activation pairs from activation results.
-///
-/// Returns all unique pairs where both nodes exceed the activation threshold.
-/// Seed-seed pairs are excluded (they reflect context matching, not behavioral affinity).
-pub fn extract_coactivation_pairs(
-    activations: &[f64],
-    seed_nodes: &[u32],
-    cfg: &HebbianConfig,
+pub fn extract_co_activation_pairs(
+    results: &[ActivationResult],
+    seed_nodes: &HashSet<NodeId>,
+    config: &HebbianConfig,
 ) -> Vec<CoActivationPair> {
-    let seed_set: std::collections::HashSet<u32> = seed_nodes.iter().copied().collect();
-
-    // Collect nodes above threshold.
-    let active: Vec<(u32, f64)> = activations
+    // Filter nodes above threshold
+    let active: Vec<&ActivationResult> = results
         .iter()
-        .enumerate()
-        .filter(|&(_, a)| *a >= cfg.activation_threshold)
-        .map(|(i, &a)| (i as u32, a))
+        .filter(|r| r.activation.get() >= config.activation_threshold)
         .collect();
 
-    if active.len() < 2 {
-        return Vec::new();
-    }
-
-    let mut pairs = Vec::with_capacity(active.len() * (active.len() - 1) / 2);
+    let mut pairs = Vec::new();
     for i in 0..active.len() {
         for j in (i + 1)..active.len() {
-            let a_is_seed = seed_set.contains(&active[i].0);
-            let b_is_seed = seed_set.contains(&active[j].0);
-
-            // Skip seed-seed pairs.
-            if a_is_seed && b_is_seed {
-                continue;
-            }
-
-            // Canonical ordering: smaller node ID first.
-            let (a, b) = if active[i].0 < active[j].0 {
+            let (a, b) = if active[i].node < active[j].node {
                 (active[i], active[j])
             } else {
                 (active[j], active[i])
             };
 
+            // Exclude seed-seed pairs
+            if seed_nodes.contains(&a.node) && seed_nodes.contains(&b.node) {
+                continue;
+            }
+
             pairs.push(CoActivationPair {
-                node_a: a.0,
-                node_b: b.0,
-                activation_a: a.1,
-                activation_b: b.1,
+                node_a: a.node,
+                node_b: b.node,
+                activation_a: a.activation,
+                activation_b: b.activation,
             });
         }
     }
@@ -101,58 +98,135 @@ pub fn extract_coactivation_pairs(
     pairs
 }
 
-fn clamp_weight(w: f64, min: f64, max: f64) -> f64 {
-    if w.is_nan() || w.is_infinite() {
-        return min;
-    }
-    w.clamp(min, max)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn default_config() -> HebbianConfig {
+        HebbianConfig::builder().build()
+    }
+
+    fn act(v: f64) -> Activation {
+        Activation::new(v).unwrap()
+    }
+    fn wt(v: f64) -> EdgeWeight {
+        EdgeWeight::new(v).unwrap()
+    }
+
     #[test]
     fn oja_strengthens_coactivation() {
-        let cfg = HebbianConfig::default();
-        let new_w = oja_update(0.5, 0.8, 0.7, &cfg);
-        // With high co-activation, weight should increase (hebbian > forgetting).
-        // hebbian = 0.56, forgetting = 0.49 * 0.5 = 0.245
-        // dw = 0.05 * (0.56 - 0.245) = 0.01575
-        assert!(new_w > 0.5);
+        let learner = OjaLearner;
+        let cfg = default_config();
+        let old_w = wt(0.3);
+        let new_w = learner.update_weight(old_w, act(0.8), act(0.7), &cfg);
+        assert!(new_w.get() > old_w.get());
     }
 
     #[test]
     fn oja_stabilizes_at_high_weight() {
-        let cfg = HebbianConfig::default();
-        // At high weight, forgetting term dominates.
-        let new_w = oja_update(0.9, 0.5, 0.5, &cfg);
-        // hebbian = 0.25, forgetting = 0.25 * 0.9 = 0.225
-        // dw = 0.05 * (0.25 - 0.225) = 0.00125
-        // Still increases slightly. Let's check it stays in bounds.
-        assert!(new_w <= cfg.max_weight);
-        assert!(new_w >= cfg.min_weight);
+        // Equilibrium: W = A_i / A_j. When A_i=0.5, A_j=0.8, equilibrium W=0.625
+        // At W=0.9 (above equilibrium), forgetting dominates → weight decreases
+        let learner = OjaLearner;
+        let cfg = default_config();
+        let old_w = wt(0.9);
+        let new_w = learner.update_weight(old_w, act(0.5), act(0.8), &cfg);
+        assert!(new_w.get() < old_w.get());
     }
 
     #[test]
     fn oja_clamps_to_bounds() {
-        let cfg = HebbianConfig::default();
-        let new_w = oja_update(0.001, 0.0, 0.0, &cfg);
-        assert_eq!(new_w, cfg.min_weight);
+        let learner = OjaLearner;
+        let cfg = HebbianConfig::builder()
+            .min_weight(0.1)
+            .max_weight(0.9)
+            .learning_rate(10.0)
+            .build();
+        let result = learner.update_weight(wt(0.5), act(0.99), act(0.99), &cfg);
+        assert!(result.get() >= 0.1 && result.get() <= 0.9);
     }
 
     #[test]
-    fn coactivation_excludes_seed_seed_pairs() {
-        let activations = vec![0.8, 0.7, 0.6, 0.5];
-        let seeds = vec![0, 1];
-        let cfg = HebbianConfig::default();
-        let pairs = extract_coactivation_pairs(&activations, &seeds, &cfg);
+    fn oja_nan_safety() {
+        let learner = OjaLearner;
+        let cfg = default_config();
+        let result = learner.update_weight(wt(0.5), act(0.0), act(0.0), &cfg);
+        assert!(!result.get().is_nan());
+        assert!(result.get() >= cfg.min_weight);
+    }
 
-        // Should NOT have pair (0, 1) since both are seeds.
-        for p in &pairs {
-            assert!(!(p.node_a == 0 && p.node_b == 1));
-        }
-        // Should have pairs involving at least one non-seed.
-        assert!(!pairs.is_empty());
+    #[test]
+    fn extracts_pairs_above_threshold() {
+        let results = vec![
+            ActivationResult {
+                node: NodeId(0),
+                activation: act(0.5),
+                distance: 0,
+            },
+            ActivationResult {
+                node: NodeId(1),
+                activation: act(0.3),
+                distance: 1,
+            },
+            ActivationResult {
+                node: NodeId(2),
+                activation: act(0.1),
+                distance: 2,
+            },
+        ];
+        let seeds = HashSet::new();
+        let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].node_a, NodeId(0));
+        assert_eq!(pairs[0].node_b, NodeId(1));
+    }
+
+    #[test]
+    fn excludes_seed_seed_pairs() {
+        let results = vec![
+            ActivationResult {
+                node: NodeId(0),
+                activation: act(0.8),
+                distance: 0,
+            },
+            ActivationResult {
+                node: NodeId(1),
+                activation: act(0.7),
+                distance: 0,
+            },
+            ActivationResult {
+                node: NodeId(2),
+                activation: act(0.6),
+                distance: 1,
+            },
+        ];
+        let seeds: HashSet<NodeId> = [NodeId(0), NodeId(1)].into();
+        let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs
+            .iter()
+            .all(|p| !(seeds.contains(&p.node_a) && seeds.contains(&p.node_b))));
+    }
+
+    #[test]
+    fn canonical_ordering_a_less_than_b() {
+        let results = vec![
+            ActivationResult {
+                node: NodeId(5),
+                activation: act(0.5),
+                distance: 1,
+            },
+            ActivationResult {
+                node: NodeId(2),
+                activation: act(0.4),
+                distance: 1,
+            },
+        ];
+        let seeds = HashSet::new();
+        let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs[0].node_a < pairs[0].node_b);
     }
 }

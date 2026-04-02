@@ -1,139 +1,178 @@
-//! Jaccard-based virtual affinity edge generation.
-
 use crate::graph::{EdgeInput, EdgeKind};
+use crate::types::{EdgeWeight, NodeId, TagId};
 
-/// Configuration for virtual affinity edges.
-#[derive(Debug, Clone)]
 pub struct AffinityConfig {
-    /// Maximum weight for virtual edges. Default: 0.4.
     pub max_weight: f64,
-    /// Minimum Jaccard similarity to create edge. Default: 0.3.
     pub min_jaccard: f64,
 }
 
-impl Default for AffinityConfig {
-    fn default() -> Self {
-        AffinityConfig {
-            max_weight: 0.4,
-            min_jaccard: 0.3,
-        }
-    }
+pub trait AffinityGenerator: Send + Sync {
+    fn generate(&self, node_tags: &[Vec<TagId>], config: &AffinityConfig) -> Vec<EdgeInput>;
 }
 
-/// Compute Jaccard similarity between two tag sets.
-///
-/// J(A, B) = |A ∩ B| / |A ∪ B|
-pub fn jaccard_similarity(a: &[u32], b: &[u32]) -> f64 {
-    if a.is_empty() && b.is_empty() {
+pub struct JaccardAffinity;
+
+/// Two-pointer merge Jaccard on pre-sorted tag slices.
+pub fn jaccard_similarity(a: &[TagId], b: &[TagId]) -> f64 {
+    if a.is_empty() || b.is_empty() {
         return 0.0;
     }
 
-    // Tags are represented as sorted tag IDs for O(n+m) intersection.
     let mut i = 0;
     let mut j = 0;
-    let mut intersection = 0u32;
-    let mut union_size = 0u32;
+    let mut intersection = 0usize;
+    let mut union = 0usize;
 
-    // Merge-style intersection on sorted slices.
     while i < a.len() && j < b.len() {
-        if a[i] == b[j] {
-            intersection += 1;
-            union_size += 1;
-            i += 1;
-            j += 1;
-        } else if a[i] < b[j] {
-            union_size += 1;
-            i += 1;
-        } else {
-            union_size += 1;
-            j += 1;
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal => {
+                intersection += 1;
+                union += 1;
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => {
+                union += 1;
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                union += 1;
+                j += 1;
+            }
         }
     }
-    union_size += (a.len() - i) as u32 + (b.len() - j) as u32;
 
-    if union_size == 0 {
-        return 0.0;
+    union += (a.len() - i) + (b.len() - j);
+
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
     }
-
-    intersection as f64 / union_size as f64
 }
 
-/// Generate virtual affinity edges for all node pairs exceeding minJaccard.
-///
-/// `node_tags` maps node index to sorted tag IDs.
-/// Returns edges to add to the graph (or overlay during propagation).
-pub fn compute_affinity_edges(
-    node_tags: &[Vec<u32>],
-    config: &AffinityConfig,
-) -> Vec<EdgeInput> {
-    let n = node_tags.len();
-    let mut edges = Vec::new();
+impl AffinityGenerator for JaccardAffinity {
+    fn generate(&self, node_tags: &[Vec<TagId>], config: &AffinityConfig) -> Vec<EdgeInput> {
+        let mut edges = Vec::new();
+        let n = node_tags.len();
 
-    for i in 0..n {
-        if node_tags[i].is_empty() {
-            continue;
-        }
-        for j in (i + 1)..n {
-            if node_tags[j].is_empty() {
+        for i in 0..n {
+            if node_tags[i].is_empty() {
                 continue;
             }
-
-            let j_sim = jaccard_similarity(&node_tags[i], &node_tags[j]);
-            if j_sim >= config.min_jaccard {
-                let weight = j_sim * config.max_weight;
-                edges.push(EdgeInput {
-                    source: i as u32,
-                    target: j as u32,
-                    weight,
-                    kind: EdgeKind::FeatureAffinity,
-                });
+            for j in (i + 1)..n {
+                if node_tags[j].is_empty() {
+                    continue;
+                }
+                let sim = jaccard_similarity(&node_tags[i], &node_tags[j]);
+                if sim >= config.min_jaccard {
+                    edges.push(EdgeInput {
+                        source: NodeId(i as u32),
+                        target: NodeId(j as u32),
+                        weight: EdgeWeight::new_unchecked((sim * config.max_weight).min(1.0)),
+                        kind: EdgeKind::FeatureAffinity,
+                    });
+                }
             }
         }
-    }
 
-    edges
+        edges
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn jaccard_identical() {
-        assert!((jaccard_similarity(&[1, 2, 3], &[1, 2, 3]) - 1.0).abs() < 1e-10);
+    fn tag(id: u32) -> TagId {
+        TagId(id)
     }
 
     #[test]
-    fn jaccard_disjoint() {
-        assert!((jaccard_similarity(&[1, 2], &[3, 4])).abs() < 1e-10);
+    fn jaccard_identical_sets() {
+        let a = vec![tag(1), tag(2), tag(3)];
+        assert!((jaccard_similarity(&a, &a) - 1.0).abs() < 1e-10);
     }
 
     #[test]
-    fn jaccard_partial() {
-        // {1,2,3} ∩ {2,3,4} = {2,3}, union = {1,2,3,4}
-        let j = jaccard_similarity(&[1, 2, 3], &[2, 3, 4]);
-        assert!((j - 0.5).abs() < 1e-10);
+    fn jaccard_disjoint_sets() {
+        let a = vec![tag(1), tag(2)];
+        let b = vec![tag(3), tag(4)];
+        assert_eq!(jaccard_similarity(&a, &b), 0.0);
     }
 
     #[test]
-    fn jaccard_empty() {
-        assert_eq!(jaccard_similarity(&[], &[]), 0.0);
-        assert_eq!(jaccard_similarity(&[1], &[]), 0.0);
+    fn jaccard_partial_overlap() {
+        let a = vec![tag(1), tag(2), tag(3)];
+        let b = vec![tag(2), tag(3), tag(4)];
+        assert!((jaccard_similarity(&a, &b) - 0.5).abs() < 1e-10);
     }
 
     #[test]
-    fn affinity_edges_above_threshold() {
-        let tags = vec![
-            vec![1, 2, 3],    // node 0
-            vec![2, 3, 4],    // node 1 — J(0,1)=0.5 >= 0.3 ✓
-            vec![10, 11, 12], // node 2 — J(0,2)=0.0 < 0.3 ✗
+    fn jaccard_both_empty() {
+        let a: Vec<TagId> = vec![];
+        assert_eq!(jaccard_similarity(&a, &a), 0.0);
+    }
+
+    #[test]
+    fn jaccard_one_empty() {
+        let a = vec![tag(1)];
+        let b: Vec<TagId> = vec![];
+        assert_eq!(jaccard_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn jaccard_is_symmetric() {
+        let a = vec![tag(1), tag(2), tag(3)];
+        let b = vec![tag(2), tag(4)];
+        assert_eq!(jaccard_similarity(&a, &b), jaccard_similarity(&b, &a));
+    }
+
+    #[test]
+    fn generates_edges_above_threshold() {
+        let node_tags = vec![
+            vec![tag(1), tag(2), tag(3)],
+            vec![tag(2), tag(3), tag(4)],
+            vec![tag(10), tag(11)],
         ];
-        let cfg = AffinityConfig::default();
-        let edges = compute_affinity_edges(&tags, &cfg);
-
+        let config = AffinityConfig {
+            max_weight: 0.4,
+            min_jaccard: 0.3,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, 0);
-        assert_eq!(edges[0].target, 1);
-        assert!((edges[0].weight - 0.5 * 0.4).abs() < 1e-10);
+        assert_eq!(edges[0].source, NodeId(0));
+        assert_eq!(edges[0].target, NodeId(1));
+        assert_eq!(edges[0].kind, EdgeKind::FeatureAffinity);
+        assert!((edges[0].weight.get() - 0.2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn skips_empty_tag_sets() {
+        let node_tags = vec![vec![tag(1), tag(2)], vec![], vec![tag(1), tag(2)]];
+        let config = AffinityConfig {
+            max_weight: 0.4,
+            min_jaccard: 0.0,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, NodeId(0));
+        assert_eq!(edges[0].target, NodeId(2));
+    }
+
+    #[test]
+    fn edges_have_canonical_source_less_than_target() {
+        let node_tags = vec![vec![tag(1)], vec![tag(1)]];
+        let config = AffinityConfig {
+            max_weight: 0.4,
+            min_jaccard: 0.0,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
+        for edge in &edges {
+            assert!(edge.source.get() < edge.target.get());
+        }
     }
 }
