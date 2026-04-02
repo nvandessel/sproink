@@ -1,10 +1,36 @@
 use rayon::prelude::*;
 use typed_builder::TypedBuilder;
 
-use crate::graph::{EdgeKind, Graph};
+use crate::graph::{EdgeData, EdgeKind, Graph};
 use crate::inhibition::{InhibitionConfig, Inhibitor, TopMInhibitor};
 use crate::squash::squash_sigmoid;
 use crate::types::{Activation, ActivationResult, NodeId, Seed};
+
+struct EdgeKindCounts {
+    positive: u32,
+    conflict: u32,
+    dir_suppress: u32,
+    virtual_affinity: u32,
+}
+
+fn count_edge_kinds(neighbors: &[EdgeData]) -> EdgeKindCounts {
+    let mut counts = EdgeKindCounts {
+        positive: 0,
+        conflict: 0,
+        dir_suppress: 0,
+        virtual_affinity: 0,
+    };
+    for edge in neighbors {
+        match edge.kind {
+            EdgeKind::Positive => counts.positive += 1,
+            EdgeKind::Conflicts => counts.conflict += 1,
+            EdgeKind::DirectionalSuppressive => counts.dir_suppress += 1,
+            EdgeKind::FeatureAffinity => counts.virtual_affinity += 1,
+            EdgeKind::DirectionalPassive => {}
+        }
+    }
+    counts
+}
 
 const PARALLEL_THRESHOLD: u32 = 1024;
 
@@ -38,43 +64,37 @@ impl<G: Graph> Engine<G> {
     pub fn activate(&self, seeds: &[Seed], config: &PropagationConfig) -> Vec<ActivationResult> {
         let n = self.graph.num_nodes() as usize;
 
-        // Step 0: Initialize
-        let mut activation = vec![0.0f64; n];
+        let mut current = vec![0.0f64; n];
+        let mut next = vec![0.0f64; n];
         let mut distance = vec![u32::MAX; n];
 
         for seed in seeds {
             let idx = seed.node.index();
             if idx < n {
-                activation[idx] = seed.activation.get();
+                current[idx] = seed.activation.get();
                 distance[idx] = 0;
             }
         }
 
-        // Steps 1..T: Propagation
         for _step in 0..config.max_steps {
-            let mut new = activation.clone();
-            self.propagate_step(&activation, &mut new, &mut distance, config);
-            activation = new;
+            next.copy_from_slice(&current);
+            self.propagate_step(&current, &mut next, &mut distance, config);
+            std::mem::swap(&mut current, &mut next);
         }
 
-        // Post-processing
-        // 1. Lateral inhibition
         if let Some(ref inh_config) = config.inhibition {
-            TopMInhibitor.inhibit(&mut activation, inh_config);
+            TopMInhibitor.inhibit(&mut current, inh_config);
         }
 
-        // 2. Sigmoid squashing
-        squash_sigmoid(&mut activation, config.sigmoid_gain, config.sigmoid_center);
+        squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
 
-        // 3. Threshold filter
-        for v in activation.iter_mut() {
+        for v in current.iter_mut() {
             if *v < config.min_activation {
                 *v = 0.0;
             }
         }
 
-        // Collect results
-        let mut results: Vec<ActivationResult> = activation
+        let mut results: Vec<ActivationResult> = current
             .iter()
             .enumerate()
             .filter(|&(_, &a)| a > 0.0)
@@ -85,7 +105,6 @@ impl<G: Graph> Engine<G> {
             })
             .collect();
 
-        // Sort by activation descending, tie-break by NodeId ascending
         results.sort_by(|a, b| {
             b.activation
                 .get()
@@ -126,22 +145,7 @@ impl<G: Graph> Engine<G> {
             }
 
             let neighbors = self.graph.neighbors(NodeId(i as u32));
-
-            // Count edges by category (excluding DirectionalPassive)
-            let mut positive_count = 0u32;
-            let mut conflict_count = 0u32;
-            let mut dir_suppress_count = 0u32;
-            let mut virtual_count = 0u32;
-
-            for edge in neighbors {
-                match edge.kind {
-                    EdgeKind::Positive => positive_count += 1,
-                    EdgeKind::Conflicts => conflict_count += 1,
-                    EdgeKind::DirectionalSuppressive => dir_suppress_count += 1,
-                    EdgeKind::FeatureAffinity => virtual_count += 1,
-                    EdgeKind::DirectionalPassive => {} // excluded from all counts
-                }
-            }
+            let counts = count_edge_kinds(neighbors);
 
             for edge in neighbors {
                 let base_energy =
@@ -150,27 +154,24 @@ impl<G: Graph> Engine<G> {
 
                 match edge.kind {
                     EdgeKind::Positive => {
-                        let energy = base_energy / positive_count as f64;
+                        let energy = base_energy / counts.positive as f64;
                         new[j] = new[j].max(energy);
                     }
                     EdgeKind::FeatureAffinity => {
-                        let energy = base_energy / virtual_count as f64;
+                        let energy = base_energy / counts.virtual_affinity as f64;
                         new[j] = new[j].max(energy);
                     }
                     EdgeKind::Conflicts => {
-                        let energy = base_energy / conflict_count as f64;
+                        let energy = base_energy / counts.conflict as f64;
                         new[j] = (new[j] - energy).max(0.0);
                     }
                     EdgeKind::DirectionalSuppressive => {
-                        let energy = base_energy / dir_suppress_count as f64;
+                        let energy = base_energy / counts.dir_suppress as f64;
                         new[j] = (new[j] - energy).max(0.0);
                     }
-                    EdgeKind::DirectionalPassive => {
-                        continue; // skip entirely
-                    }
+                    EdgeKind::DirectionalPassive => continue,
                 }
 
-                // Distance tracking
                 if distances[i] != u32::MAX {
                     let candidate = distances[i] + 1;
                     if candidate < distances[j] {
@@ -190,8 +191,6 @@ impl<G: Graph> Engine<G> {
     ) {
         let n = self.graph.num_nodes() as usize;
 
-        // Phase 1: Parallel computation of per-source contributions
-        // Each thread accumulates positive maxima and suppressive deltas separately
         struct Updates {
             positive_max: Vec<f64>,
             suppress_delta: Vec<f64>,
@@ -209,21 +208,7 @@ impl<G: Graph> Engine<G> {
                 },
                 |mut local, i| {
                     let neighbors = self.graph.neighbors(NodeId(i as u32));
-
-                    let mut positive_count = 0u32;
-                    let mut conflict_count = 0u32;
-                    let mut dir_suppress_count = 0u32;
-                    let mut virtual_count = 0u32;
-
-                    for edge in neighbors {
-                        match edge.kind {
-                            EdgeKind::Positive => positive_count += 1,
-                            EdgeKind::Conflicts => conflict_count += 1,
-                            EdgeKind::DirectionalSuppressive => dir_suppress_count += 1,
-                            EdgeKind::FeatureAffinity => virtual_count += 1,
-                            EdgeKind::DirectionalPassive => {}
-                        }
-                    }
+                    let counts = count_edge_kinds(neighbors);
 
                     for edge in neighbors {
                         let base_energy = current[i]
@@ -234,19 +219,19 @@ impl<G: Graph> Engine<G> {
 
                         match edge.kind {
                             EdgeKind::Positive => {
-                                let energy = base_energy / positive_count as f64;
+                                let energy = base_energy / counts.positive as f64;
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                             }
                             EdgeKind::FeatureAffinity => {
-                                let energy = base_energy / virtual_count as f64;
+                                let energy = base_energy / counts.virtual_affinity as f64;
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                             }
                             EdgeKind::Conflicts => {
-                                let energy = base_energy / conflict_count as f64;
+                                let energy = base_energy / counts.conflict as f64;
                                 local.suppress_delta[j] += energy;
                             }
                             EdgeKind::DirectionalSuppressive => {
-                                let energy = base_energy / dir_suppress_count as f64;
+                                let energy = base_energy / counts.dir_suppress as f64;
                                 local.suppress_delta[j] += energy;
                             }
                             EdgeKind::DirectionalPassive => continue,
@@ -279,7 +264,6 @@ impl<G: Graph> Engine<G> {
                 },
             );
 
-        // Phase 2: Merge into `new`
         for j in 0..n {
             new[j] = new[j].max(merged.positive_max[j]);
             new[j] = (new[j] - merged.suppress_delta[j]).max(0.0);
@@ -449,8 +433,14 @@ mod tests {
             },
         ];
         let results = engine.activate(&seeds, &config);
-        let a =
-            |id: u32| results.iter().find(|r| r.node == NodeId(id)).unwrap().activation.get();
+        let a = |id: u32| {
+            results
+                .iter()
+                .find(|r| r.node == NodeId(id))
+                .map(|r| r.activation.get())
+                .unwrap_or(0.0)
+        };
+        // Node 0 survives; node 1 is suppressed (lower or absent)
         assert!(a(0) > a(1));
     }
 
@@ -529,8 +519,7 @@ mod tests {
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
-        let tied: Vec<&ActivationResult> =
-            results.iter().filter(|r| r.node != NodeId(0)).collect();
+        let tied: Vec<&ActivationResult> = results.iter().filter(|r| r.node != NodeId(0)).collect();
         for i in 1..tied.len() {
             if (tied[i - 1].activation.get() - tied[i].activation.get()).abs() < 1e-15 {
                 assert!(tied[i - 1].node.get() < tied[i].node.get());
@@ -551,8 +540,12 @@ mod tests {
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
-        let dist =
-            |id: u32| results.iter().find(|r| r.node == NodeId(id)).map(|r| r.distance);
+        let dist = |id: u32| {
+            results
+                .iter()
+                .find(|r| r.node == NodeId(id))
+                .map(|r| r.distance)
+        };
         assert_eq!(dist(0), Some(0));
         assert_eq!(dist(1), Some(1));
         assert_eq!(dist(2), Some(2));

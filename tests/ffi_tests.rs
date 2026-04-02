@@ -161,7 +161,14 @@ fn oja_update_via_ffi() {
 #[test]
 fn null_graph_build_inputs() {
     unsafe {
-        let result = sproink_graph_build(3, 2, std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null());
+        let result = sproink_graph_build(
+            3,
+            2,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        );
         assert!(result.is_null());
     }
 }

@@ -6,8 +6,6 @@ pub struct InhibitionConfig {
     pub strength: f64,
     #[builder(default = 7)]
     pub breadth: usize,
-    #[builder(default = true)]
-    pub enabled: bool,
 }
 
 pub trait Inhibitor: Send + Sync {
@@ -18,11 +16,6 @@ pub struct TopMInhibitor;
 
 impl Inhibitor for TopMInhibitor {
     fn inhibit(&self, activations: &mut [f64], config: &InhibitionConfig) {
-        if !config.enabled {
-            return;
-        }
-
-        // Collect indices of active nodes (activation > 0)
         let mut active: Vec<usize> = activations
             .iter()
             .enumerate()
@@ -42,9 +35,11 @@ impl Inhibitor for TopMInhibitor {
                 .then(a.cmp(&b))
         });
 
-        let mean_winner: f64 =
-            active[..config.breadth].iter().map(|&i| activations[i]).sum::<f64>()
-                / config.breadth as f64;
+        let mean_winner: f64 = active[..config.breadth]
+            .iter()
+            .map(|&i| activations[i])
+            .sum::<f64>()
+            / config.breadth as f64;
 
         for &i in &active[config.breadth..] {
             let suppression = config.strength * (mean_winner - activations[i]);
@@ -57,21 +52,11 @@ impl Inhibitor for TopMInhibitor {
 mod tests {
     use super::*;
 
-    fn config(strength: f64, breadth: usize, enabled: bool) -> InhibitionConfig {
+    fn config(strength: f64, breadth: usize) -> InhibitionConfig {
         InhibitionConfig::builder()
             .strength(strength)
             .breadth(breadth)
-            .enabled(enabled)
             .build()
-    }
-
-    #[test]
-    fn disabled_is_noop() {
-        let mut activations = vec![0.8, 0.6, 0.4, 0.2];
-        let original = activations.clone();
-        let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 2, false));
-        assert_eq!(activations, original);
     }
 
     #[test]
@@ -79,7 +64,7 @@ mod tests {
         let mut activations = vec![0.8, 0.6, 0.4, 0.0, 0.0];
         let original = activations.clone();
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 5, true));
+        inhibitor.inhibit(&mut activations, &config(0.15, 5));
         assert_eq!(activations, original);
     }
 
@@ -87,13 +72,10 @@ mod tests {
     fn losers_are_suppressed() {
         let mut activations = vec![0.8, 0.6, 0.4, 0.2];
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 2, true));
+        inhibitor.inhibit(&mut activations, &config(0.15, 2));
         assert_eq!(activations[0], 0.8);
         assert_eq!(activations[1], 0.6);
-        // mean_winner = (0.8 + 0.6) / 2 = 0.7
-        // loser[2]: suppression = 0.15 * (0.7 - 0.4) = 0.045 => 0.4 - 0.045 = 0.355
         assert!((activations[2] - 0.355).abs() < 1e-10);
-        // loser[3]: suppression = 0.15 * (0.7 - 0.2) = 0.075 => 0.2 - 0.075 = 0.125
         assert!((activations[3] - 0.125).abs() < 1e-10);
     }
 
@@ -101,7 +83,7 @@ mod tests {
     fn suppression_floors_at_zero() {
         let mut activations = vec![0.9, 0.01];
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(1.0, 1, true));
+        inhibitor.inhibit(&mut activations, &config(1.0, 1));
         assert!(activations[1] >= 0.0);
     }
 
@@ -109,10 +91,9 @@ mod tests {
     fn tie_breaking_by_node_id() {
         let mut activations = vec![0.5, 0.5, 0.5];
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 2, true));
+        inhibitor.inhibit(&mut activations, &config(0.15, 2));
         assert_eq!(activations[0], 0.5);
         assert_eq!(activations[1], 0.5);
-        // suppression = 0.15 * (0.5 - 0.5) = 0.0
         assert_eq!(activations[2], 0.5);
     }
 
@@ -121,7 +102,7 @@ mod tests {
         let mut activations = vec![0.8, 0.0, 0.0, 0.0];
         let original = activations.clone();
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 2, true));
+        inhibitor.inhibit(&mut activations, &config(0.15, 2));
         assert_eq!(activations, original);
     }
 }

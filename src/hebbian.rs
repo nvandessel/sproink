@@ -72,7 +72,7 @@ pub fn extract_co_activation_pairs(
         .filter(|r| r.activation.get() >= config.activation_threshold)
         .collect();
 
-    let mut pairs = Vec::new();
+    let mut pairs = Vec::with_capacity(active.len() * active.len().saturating_sub(1) / 2);
     for i in 0..active.len() {
         for j in (i + 1)..active.len() {
             let (a, b) = if active[i].node < active[j].node {
@@ -204,9 +204,11 @@ mod tests {
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
         let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
         assert_eq!(pairs.len(), 2);
-        assert!(pairs
-            .iter()
-            .all(|p| !(seeds.contains(&p.node_a) && seeds.contains(&p.node_b))));
+        assert!(
+            pairs
+                .iter()
+                .all(|p| !(seeds.contains(&p.node_a) && seeds.contains(&p.node_b)))
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use sproink::*;
+use std::collections::HashSet;
 
 fn weight(v: f64) -> EdgeWeight {
     EdgeWeight::new(v).unwrap()
@@ -145,11 +145,10 @@ fn directional_override() {
     ];
     let results = engine.activate(&seeds, &config);
 
-    let a0 = find(&results, 0).unwrap().activation.get();
-    let a1 = find(&results, 1).unwrap().activation.get();
+    let a0 = find(&results, 0).map(|r| r.activation.get()).unwrap_or(0.0);
+    let a1 = find(&results, 1).map(|r| r.activation.get()).unwrap_or(0.0);
 
-    // Node 0 should be unaffected (reverse is DirectionalPassive, skipped)
-    // Node 1 should be suppressed
+    // Node 0 survives; node 1 is suppressed (lower or absent)
     assert!(a0 > a1, "Node 0 ({a0}) should be > Node 1 ({a1})");
 }
 
@@ -212,13 +211,7 @@ fn inhibition_plus_sigmoid() {
     let config = PropagationConfig::builder()
         .max_steps(1)
         .min_activation(0.001)
-        .inhibition(
-            InhibitionConfig::builder()
-                .strength(0.5)
-                .breadth(2)
-                .enabled(true)
-                .build(),
-        )
+        .inhibition(InhibitionConfig::builder().strength(0.5).breadth(2).build())
         .build();
     let seeds = vec![Seed {
         node: NodeId(0),

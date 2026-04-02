@@ -2,7 +2,9 @@
 /// sigmoid(x) = 1 / (1 + exp(-gain * (x - center)))
 pub fn squash_sigmoid(activations: &mut [f64], gain: f64, center: f64) {
     for v in activations.iter_mut() {
-        *v = 1.0 / (1.0 + (-gain * (*v - center)).exp());
+        if *v > 0.0 {
+            *v = 1.0 / (1.0 + (-gain * (*v - center)).exp());
+        }
     }
 }
 
@@ -53,7 +55,8 @@ mod tests {
         for i in 1..v.len() {
             assert!(v[i] >= v[i - 1]);
         }
-        for &val in &v {
+        assert_eq!(v[0], 0.0); // zero inputs stay zero (skipped)
+        for &val in &v[1..] {
             assert!(val > 0.0 && val < 1.0);
         }
     }

@@ -120,21 +120,26 @@ pub unsafe extern "C" fn sproink_activate(
             vec![]
         };
 
-        let inhibition = InhibitionConfig::builder()
-            .strength(inhibition_strength)
-            .breadth(inhibition_breadth as usize)
-            .enabled(inhibition_enabled)
-            .build();
+        let inhibition = if inhibition_enabled {
+            Some(
+                InhibitionConfig::builder()
+                    .strength(inhibition_strength)
+                    .breadth(inhibition_breadth as usize)
+                    .build(),
+            )
+        } else {
+            None
+        };
 
-        let config = PropagationConfig::builder()
-            .max_steps(max_steps)
-            .decay_factor(decay_factor)
-            .spread_factor(spread_factor)
-            .min_activation(min_activation)
-            .sigmoid_gain(sigmoid_gain)
-            .sigmoid_center(sigmoid_center)
-            .inhibition(inhibition)
-            .build();
+        let config = PropagationConfig {
+            max_steps,
+            decay_factor,
+            spread_factor,
+            min_activation,
+            sigmoid_gain,
+            sigmoid_center,
+            inhibition,
+        };
 
         let engine = Engine::new(graph_ref);
         let results = engine.activate(&seeds, &config);
@@ -167,8 +172,8 @@ pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, o
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
         let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (i, result) in r.results.iter().enumerate() {
-            out[i] = result.node.get();
+        for (slot, result) in out.iter_mut().zip(&r.results) {
+            *slot = result.node.get();
         }
     }));
 }
@@ -184,25 +189,22 @@ pub unsafe extern "C" fn sproink_results_activations(
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
         let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (i, result) in r.results.iter().enumerate() {
-            out[i] = result.activation.get();
+        for (slot, result) in out.iter_mut().zip(&r.results) {
+            *slot = result.activation.get();
         }
     }));
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sproink_results_distances(
-    results: *const SproinkResults,
-    out: *mut u32,
-) {
+pub unsafe extern "C" fn sproink_results_distances(results: *const SproinkResults, out: *mut u32) {
     if results.is_null() || out.is_null() {
         return;
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
         let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (i, result) in r.results.iter().enumerate() {
-            out[i] = result.distance;
+        for (slot, result) in out.iter_mut().zip(&r.results) {
+            *slot = result.distance;
         }
     }));
 }
@@ -273,9 +275,9 @@ pub unsafe extern "C" fn sproink_pairs_nodes(
         let p = unsafe { &*pairs };
         let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
         let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
-        for (i, pair) in p.pairs.iter().enumerate() {
-            out_a[i] = pair.node_a.get();
-            out_b[i] = pair.node_b.get();
+        for ((sa, sb), pair) in out_a.iter_mut().zip(out_b.iter_mut()).zip(&p.pairs) {
+            *sa = pair.node_a.get();
+            *sb = pair.node_b.get();
         }
     }));
 }
@@ -293,9 +295,9 @@ pub unsafe extern "C" fn sproink_pairs_activations(
         let p = unsafe { &*pairs };
         let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
         let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
-        for (i, pair) in p.pairs.iter().enumerate() {
-            out_a[i] = pair.activation_a.get();
-            out_b[i] = pair.activation_b.get();
+        for ((sa, sb), pair) in out_a.iter_mut().zip(out_b.iter_mut()).zip(&p.pairs) {
+            *sa = pair.activation_a.get();
+            *sb = pair.activation_b.get();
         }
     }));
 }
