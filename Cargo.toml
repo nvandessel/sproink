@@ -1,0 +1,19 @@
+[package]
+name = "sproink"
+version = "0.1.0"
+edition = "2024"
+description = "In-memory spreading activation engine with CSR graph"
+license = "MIT"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+rayon = "1.10"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "propagation"
+harness = false
