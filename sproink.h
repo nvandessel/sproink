@@ -1,76 +1,68 @@
 #ifndef SPROINK_H
 #define SPROINK_H
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
-/* Opaque handle types */
 typedef struct SproinkGraph SproinkGraph;
-typedef struct SproinkResults SproinkResults;
+
 typedef struct SproinkPairs SproinkPairs;
 
-/* --- Graph --- */
+typedef struct SproinkResults SproinkResults;
 
-SproinkGraph *sproink_graph_build(
-    uint32_t num_nodes,
-    uint32_t num_edges,
-    const uint32_t *sources,
-    const uint32_t *targets,
-    const double *weights,
-    const uint8_t *kinds
-);
+struct SproinkGraph *sproink_graph_build(uint32_t num_nodes,
+                                         uint32_t num_edges,
+                                         const uint32_t *sources,
+                                         const uint32_t *targets,
+                                         const double *weights,
+                                         const uint8_t *kinds);
 
-void sproink_graph_free(SproinkGraph *graph);
+void sproink_graph_free(struct SproinkGraph *graph);
 
-/* --- Activation --- */
+struct SproinkResults *sproink_activate(const struct SproinkGraph *graph,
+                                        uint32_t num_seeds,
+                                        const uint32_t *seed_nodes,
+                                        const double *seed_activations,
+                                        uint32_t max_steps,
+                                        double decay_factor,
+                                        double spread_factor,
+                                        double min_activation,
+                                        double sigmoid_gain,
+                                        double sigmoid_center,
+                                        bool inhibition_enabled,
+                                        double inhibition_strength,
+                                        uint32_t inhibition_breadth);
 
-SproinkResults *sproink_activate(
-    const SproinkGraph *graph,
-    uint32_t num_seeds,
-    const uint32_t *seed_nodes,
-    const double *seed_activations,
-    uint32_t max_steps,
-    double decay_factor,
-    double spread_factor,
-    double min_activation,
-    double sigmoid_gain,
-    double sigmoid_center,
-    bool inhibition_enabled,
-    double inhibition_strength,
-    uint32_t inhibition_breadth
-);
+uint32_t sproink_results_len(const struct SproinkResults *results);
 
-/* --- Results --- */
+void sproink_results_nodes(const struct SproinkResults *results, uint32_t *out);
 
-uint32_t sproink_results_len(const SproinkResults *results);
-void sproink_results_nodes(const SproinkResults *results, uint32_t *out);
-void sproink_results_activations(const SproinkResults *results, double *out);
-void sproink_results_distances(const SproinkResults *results, uint32_t *out);
-void sproink_results_free(SproinkResults *results);
+void sproink_results_activations(const struct SproinkResults *results, double *out);
 
-/* --- Co-Activation Pairs --- */
+void sproink_results_distances(const struct SproinkResults *results, uint32_t *out);
 
-SproinkPairs *sproink_extract_pairs(
-    const SproinkResults *results,
-    uint32_t num_seeds,
-    const uint32_t *seed_nodes,
-    double activation_threshold
-);
+void sproink_results_free(struct SproinkResults *results);
 
-uint32_t sproink_pairs_len(const SproinkPairs *pairs);
-void sproink_pairs_nodes(const SproinkPairs *pairs, uint32_t *out_a, uint32_t *out_b);
-void sproink_pairs_activations(const SproinkPairs *pairs, double *out_a, double *out_b);
-void sproink_pairs_free(SproinkPairs *pairs);
+struct SproinkPairs *sproink_extract_pairs(const struct SproinkResults *results,
+                                           uint32_t num_seeds,
+                                           const uint32_t *seed_nodes,
+                                           double activation_threshold);
 
-/* --- Learning --- */
+uint32_t sproink_pairs_len(const struct SproinkPairs *pairs);
 
-double sproink_oja_update(
-    double current_weight,
-    double activation_a,
-    double activation_b,
-    double learning_rate,
-    double min_weight,
-    double max_weight
-);
+void sproink_pairs_nodes(const struct SproinkPairs *pairs, uint32_t *out_a, uint32_t *out_b);
 
-#endif /* SPROINK_H */
+void sproink_pairs_activations(const struct SproinkPairs *pairs, double *out_a, double *out_b);
+
+void sproink_pairs_free(struct SproinkPairs *pairs);
+
+double sproink_oja_update(double current_weight,
+                          double activation_a,
+                          double activation_b,
+                          double learning_rate,
+                          double min_weight,
+                          double max_weight);
+
+#endif  /* SPROINK_H */

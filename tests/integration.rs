@@ -318,3 +318,69 @@ fn parallel_produces_valid_results() {
         assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
     }
 }
+
+/// Large graph with mixed edge kinds exercises the parallel path for all edge types
+#[test]
+fn parallel_path_mixed_edge_kinds() {
+    let n = 2000u32;
+    let mut edges = Vec::new();
+    for i in 0..n {
+        // Positive edges
+        let t1 = (i + 7) % n;
+        if t1 != i {
+            edges.push(EdgeInput {
+                source: NodeId(i),
+                target: NodeId(t1),
+                weight: weight(0.6),
+                kind: EdgeKind::Positive,
+            });
+        }
+        // Conflict edges (every 10th node)
+        if i % 10 == 0 {
+            let t2 = (i + 3) % n;
+            if t2 != i {
+                edges.push(EdgeInput {
+                    source: NodeId(i),
+                    target: NodeId(t2),
+                    weight: weight(0.5),
+                    kind: EdgeKind::Conflicts,
+                });
+            }
+        }
+        // DirectionalSuppressive edges (every 20th node)
+        if i % 20 == 0 {
+            let t3 = (i + 11) % n;
+            if t3 != i {
+                edges.push(EdgeInput {
+                    source: NodeId(i),
+                    target: NodeId(t3),
+                    weight: weight(0.4),
+                    kind: EdgeKind::DirectionalSuppressive,
+                });
+            }
+        }
+        // FeatureAffinity edges (every 15th node)
+        if i % 15 == 0 {
+            let t4 = (i + 5) % n;
+            if t4 != i {
+                edges.push(EdgeInput {
+                    source: NodeId(i),
+                    target: NodeId(t4),
+                    weight: weight(0.3),
+                    kind: EdgeKind::FeatureAffinity,
+                });
+            }
+        }
+    }
+    let graph = CsrGraph::build(n, edges);
+    let engine = Engine::new(graph);
+    let config = PropagationConfig::builder().build();
+    let seeds = vec![Seed {
+        node: NodeId(0),
+        activation: act(1.0),
+    }];
+    let results = engine.activate(&seeds, &config);
+    for r in &results {
+        assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
+    }
+}
