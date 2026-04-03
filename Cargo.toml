@@ -3,7 +3,7 @@ name = "sproink"
 version = "0.1.0"
 edition = "2024"
 description = "In-memory spreading activation engine with CSR graph"
-license = "MIT"
+license = "Apache-2.0"
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]

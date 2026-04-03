@@ -4,7 +4,7 @@
 [![codecov](https://codecov.io/gh/nvandessel/sproink/branch/main/graph/badge.svg)](https://codecov.io/gh/nvandessel/sproink)
 [![Crates.io](https://img.shields.io/crates/v/sproink.svg)](https://crates.io/crates/sproink)
 [![docs.rs](https://docs.rs/sproink/badge.svg)](https://docs.rs/sproink)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **In-memory spreading activation engine with CSR graph and C FFI.**
 
@@ -101,4 +101,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full development workflow.
 
 ## License
 
-[MIT](LICENSE) -- Copyright 2026 Nic van Dessel
+[Apache 2.0](LICENSE) -- Copyright 2026 Nic van Dessel
