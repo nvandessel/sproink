@@ -1,1 +1,7 @@
-/target
+target/
+*.profraw
+*.profdata
+lcov.info
+coverage/
+docs/team-up/
+.floop/
