@@ -19,7 +19,7 @@ mockall = "0.13"
 proptest = "1.9"
 
 [build-dependencies]
-cbindgen = "0.27"
+cbindgen = "0.29"
 
 [[bench]]
 name = "propagation"
