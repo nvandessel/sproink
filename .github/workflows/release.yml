@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cross-compilation toolchain for Linux ARM64
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build staticlib
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package artifacts (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/libsproink.a dist/
+          if [ -f target/${{ matrix.target }}/release/libsproink.so ]; then
+            cp target/${{ matrix.target }}/release/libsproink.so dist/
+          fi
+          if [ -f target/${{ matrix.target }}/release/libsproink.dylib ]; then
+            cp target/${{ matrix.target }}/release/libsproink.dylib dist/
+          fi
+          cp sproink.h dist/
+          tar czf sproink-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Package artifacts (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "target/${{ matrix.target }}/release/sproink.lib" dist/
+          if (Test-Path "target/${{ matrix.target }}/release/sproink.dll") {
+            Copy-Item "target/${{ matrix.target }}/release/sproink.dll" dist/
+          }
+          Copy-Item sproink.h dist/
+          Compress-Archive -Path dist/* -DestinationPath sproink-${{ matrix.target }}.zip
+
+      - name: Upload to release (unix)
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} sproink-${{ matrix.target }}.tar.gz --clobber
+
+      - name: Upload to release (windows)
+        if: runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} sproink-${{ matrix.target }}.zip --clobber
+
+  publish-crate:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
