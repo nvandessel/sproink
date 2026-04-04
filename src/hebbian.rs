@@ -11,6 +11,7 @@ use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId};
 
 /// Configuration for Hebbian/Oja learning.
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HebbianConfig {
     /// Learning rate (η). Default: `0.05`.
     #[builder(default = 0.05)]
@@ -36,6 +37,7 @@ impl Default for HebbianConfig {
 ///
 /// Pairs are canonically ordered: `node_a < node_b`.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CoActivationPair {
     /// The lower-ID node.
     pub node_a: NodeId,

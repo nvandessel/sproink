@@ -13,6 +13,7 @@ use crate::types::{EdgeWeight, NodeId};
 /// during spreading activation.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EdgeKind {
     /// Standard excitatory edge — energy flows and accumulates via max.
     Positive = 0,
@@ -49,6 +50,7 @@ impl EdgeKind {
 
 /// A stored edge in the CSR graph (target endpoint only; source is implicit).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeData {
     /// The neighbor node this edge points to.
     pub target: NodeId,
@@ -64,6 +66,7 @@ pub struct EdgeData {
 ///
 /// Each `EdgeInput` produces two stored edges (forward and reverse).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeInput {
     /// Source node of the edge.
     pub source: NodeId,

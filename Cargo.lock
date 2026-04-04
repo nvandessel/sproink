@@ -802,6 +802,8 @@ dependencies = [
  "criterion",
  "proptest",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror",
  "typed-builder",
 ]

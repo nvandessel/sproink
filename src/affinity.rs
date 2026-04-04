@@ -10,6 +10,7 @@ use crate::types::{EdgeWeight, NodeId, TagId};
 
 /// Configuration for affinity edge generation.
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AffinityConfig {
     /// Maximum edge weight assigned to a perfect Jaccard match. Default: `0.4`.
     #[builder(default = 0.4)]

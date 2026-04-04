@@ -11,6 +11,7 @@ use crate::error::SproinkError;
 ///
 /// Wraps a `u32` and provides [`index()`](NodeId::index) for use as a slice index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct NodeId(u32);
 
@@ -54,6 +55,7 @@ impl fmt::Display for NodeId {
 /// Construction via [`new()`](EdgeWeight::new) validates the range; use
 /// [`new_unchecked()`](EdgeWeight::new_unchecked) when the value is known-good.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct EdgeWeight(f64);
 
@@ -96,6 +98,7 @@ impl fmt::Display for EdgeWeight {
 ///
 /// Represents the energy at a node during or after propagation.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct Activation(f64);
 
@@ -136,6 +139,7 @@ impl fmt::Display for Activation {
 
 /// Unique identifier for a tag used in affinity calculations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct TagId(u32);
 
@@ -172,6 +176,7 @@ impl fmt::Display for TagId {
 /// Each seed injects energy into a single node. The optional `source` field
 /// tags which external entity originated this seed (for provenance tracking).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Seed {
     /// The node to inject activation into.
     pub node: NodeId,
@@ -185,6 +190,7 @@ pub struct Seed {
 ///
 /// Results are sorted by activation descending, with ties broken by node ID ascending.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ActivationResult {
     /// The activated node.
     pub node: NodeId,
@@ -301,5 +307,32 @@ mod tests {
         assert_eq!(r.node, NodeId::new(5));
         assert_eq!(r.activation.get(), 0.6);
         assert_eq!(r.distance, 2);
+    }
+
+    // --- Serde round-trip ---
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_round_trip() {
+        let result = ActivationResult {
+            node: NodeId::new(7),
+            activation: Activation::new(0.85).unwrap(),
+            distance: 3,
+            seed_source: Some(42),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: ActivationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, deserialized);
+
+        // Also verify Seed round-trip
+        let seed = Seed {
+            node: NodeId::new(0),
+            activation: Activation::new(1.0).unwrap(),
+            source: Some(1),
+        };
+        let json = serde_json::to_string(&seed).unwrap();
+        let deserialized: Seed = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.node, seed.node);
+        assert_eq!(deserialized.activation.get(), seed.activation.get());
+        assert_eq!(deserialized.source, seed.source);
     }
 }

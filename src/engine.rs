@@ -69,6 +69,7 @@ fn temporal_weight(base_weight: f64, last_activated: Option<f64>, rho: f64, t_no
 /// assert_eq!(config.max_steps, 5);
 /// ```
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PropagationConfig {
     /// Number of propagation steps. Default: `3`.
     #[builder(default = 3)]
@@ -110,6 +111,7 @@ impl Default for PropagationConfig {
 /// Returned by [`Engine::activate_with_steps()`]. The final snapshot
 /// (after inhibition and squashing) has `is_final == true`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StepSnapshot {
     /// The step number (0 = initial seed state).
     pub step: u32,
