@@ -37,6 +37,7 @@ proptest! {
             .map(|i| Seed {
                 node: NodeId::new((i as u32) % num_nodes),
                 activation: Activation::new(0.8).unwrap(),
+            source: None,
             })
             .collect();
         let results = engine.activate(&seeds, &config);
@@ -58,6 +59,7 @@ proptest! {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: Activation::new(1.0).unwrap(),
+            source: None,
         }];
         let r1 = Engine::new(graph1).activate(&seeds, &config);
         let r2 = Engine::new(graph2).activate(&seeds, &config);
@@ -80,6 +82,7 @@ proptest! {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: Activation::new(1.0).unwrap(),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
 

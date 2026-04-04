@@ -30,6 +30,7 @@ fn bench_propagation(c: &mut Criterion) {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: Activation::new(1.0).unwrap(),
+        source: None,
     }];
 
     c.bench_function("chain_100", |b| {

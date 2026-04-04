@@ -169,16 +169,19 @@ mod tests {
                 node: NodeId::new(0),
                 activation: act(0.5),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
                 node: NodeId::new(1),
                 activation: act(0.3),
                 distance: 1,
+                seed_source: None,
             },
             ActivationResult {
                 node: NodeId::new(2),
                 activation: act(0.1),
                 distance: 2,
+                seed_source: None,
             },
         ];
         let seeds = HashSet::new();
@@ -196,16 +199,19 @@ mod tests {
                 node: NodeId::new(0),
                 activation: act(0.8),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
                 node: NodeId::new(1),
                 activation: act(0.7),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
                 node: NodeId::new(2),
                 activation: act(0.6),
                 distance: 1,
+                seed_source: None,
             },
         ];
         let seeds: HashSet<NodeId> = [NodeId::new(0), NodeId::new(1)].into();
@@ -226,11 +232,13 @@ mod tests {
                 node: NodeId::new(5),
                 activation: act(0.5),
                 distance: 1,
+                seed_source: None,
             },
             ActivationResult {
                 node: NodeId::new(2),
                 activation: act(0.4),
                 distance: 1,
+                seed_source: None,
             },
         ];
         let seeds = HashSet::new();

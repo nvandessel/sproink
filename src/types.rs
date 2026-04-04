@@ -143,6 +143,7 @@ impl fmt::Display for TagId {
 pub struct Seed {
     pub node: NodeId,
     pub activation: Activation,
+    pub source: Option<u32>,
 }
 
 /// Single node's result after propagation.
@@ -151,6 +152,7 @@ pub struct ActivationResult {
     pub node: NodeId,
     pub activation: Activation,
     pub distance: u32,
+    pub seed_source: Option<u32>,
 }
 
 #[cfg(test)]
@@ -240,6 +242,7 @@ mod tests {
         let s = Seed {
             node: NodeId::new(0),
             activation: Activation::new(0.8).unwrap(),
+            source: None,
         };
         assert_eq!(s.node, NodeId::new(0));
         assert_eq!(s.activation.get(), 0.8);
@@ -252,6 +255,7 @@ mod tests {
             node: NodeId::new(5),
             activation: Activation::new(0.6).unwrap(),
             distance: 2,
+            seed_source: None,
         };
         assert_eq!(r.node, NodeId::new(5));
         assert_eq!(r.activation.get(), 0.6);
