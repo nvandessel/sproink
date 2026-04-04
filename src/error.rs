@@ -2,6 +2,7 @@
 
 /// Errors that can occur during graph construction or propagation.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SproinkError {
     #[error("invalid {field}: {value} (expected finite value in valid range)")]
     InvalidValue { field: &'static str, value: f64 },

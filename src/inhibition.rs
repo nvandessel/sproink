@@ -7,6 +7,7 @@ use typed_builder::TypedBuilder;
 
 /// Configuration for lateral inhibition.
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InhibitionConfig {
     /// Suppression multiplier applied to losers. Default: `0.15`.
     #[builder(default = 0.15)]
