@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::types::{EdgeWeight, NodeId};
 
 #[repr(u8)]
@@ -10,6 +12,18 @@ pub enum EdgeKind {
     FeatureAffinity = 4,
 }
 
+impl fmt::Display for EdgeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EdgeKind::Positive => write!(f, "positive"),
+            EdgeKind::Conflicts => write!(f, "conflicts"),
+            EdgeKind::DirectionalSuppressive => write!(f, "directional-suppressive"),
+            EdgeKind::DirectionalPassive => write!(f, "directional-passive"),
+            EdgeKind::FeatureAffinity => write!(f, "feature-affinity"),
+        }
+    }
+}
+
 impl EdgeKind {
     fn reverse(self) -> Self {
         match self {
@@ -19,12 +33,14 @@ impl EdgeKind {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EdgeData {
     pub target: NodeId,
     pub weight: EdgeWeight,
     pub kind: EdgeKind,
 }
 
+#[derive(Debug, Clone)]
 pub struct EdgeInput {
     pub source: NodeId,
     pub target: NodeId,
@@ -43,7 +59,17 @@ pub struct CsrGraph {
     edges: Vec<EdgeData>,
 }
 
+impl fmt::Debug for CsrGraph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsrGraph")
+            .field("num_nodes", &self.num_nodes)
+            .field("num_edges", &self.edges.len())
+            .finish()
+    }
+}
+
 impl CsrGraph {
+    #[must_use]
     pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Self {
         // Count edges per node (each input produces 2 stored edges)
         let mut counts = vec![0u32; num_nodes as usize];
@@ -66,7 +92,7 @@ impl CsrGraph {
         // Initialize edges vec with placeholder data
         let mut edges: Vec<EdgeData> = (0..total_edges)
             .map(|_| EdgeData {
-                target: NodeId(0),
+                target: NodeId::new(0),
                 weight: EdgeWeight::new_unchecked(0.0),
                 kind: EdgeKind::Positive,
             })
@@ -135,104 +161,110 @@ mod tests {
         let g = CsrGraph::build(5, vec![]);
         assert_eq!(g.num_nodes(), 5);
         for i in 0..5 {
-            assert!(g.neighbors(NodeId(i)).is_empty());
+            assert!(g.neighbors(NodeId::new(i)).is_empty());
         }
     }
 
     #[test]
     fn single_positive_edge_stored_bidirectionally() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         }];
         let g = CsrGraph::build(2, edges);
-        let n0 = g.neighbors(NodeId(0));
+        let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 1);
-        assert_eq!(n0[0].target, NodeId(1));
+        assert_eq!(n0[0].target, NodeId::new(1));
         assert_eq!(n0[0].kind, EdgeKind::Positive);
-        let n1 = g.neighbors(NodeId(1));
+        let n1 = g.neighbors(NodeId::new(1));
         assert_eq!(n1.len(), 1);
-        assert_eq!(n1[0].target, NodeId(0));
+        assert_eq!(n1[0].target, NodeId::new(0));
         assert_eq!(n1[0].kind, EdgeKind::Positive);
     }
 
     #[test]
     fn directional_suppressive_reverse_is_passive() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.5),
             kind: EdgeKind::DirectionalSuppressive,
         }];
         let g = CsrGraph::build(2, edges);
-        let n0 = g.neighbors(NodeId(0));
+        let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0[0].kind, EdgeKind::DirectionalSuppressive);
-        let n1 = g.neighbors(NodeId(1));
+        let n1 = g.neighbors(NodeId::new(1));
         assert_eq!(n1[0].kind, EdgeKind::DirectionalPassive);
     }
 
     #[test]
     fn conflict_edges_are_symmetric() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.6),
             kind: EdgeKind::Conflicts,
         }];
         let g = CsrGraph::build(2, edges);
-        assert_eq!(g.neighbors(NodeId(0))[0].kind, EdgeKind::Conflicts);
-        assert_eq!(g.neighbors(NodeId(1))[0].kind, EdgeKind::Conflicts);
+        assert_eq!(g.neighbors(NodeId::new(0))[0].kind, EdgeKind::Conflicts);
+        assert_eq!(g.neighbors(NodeId::new(1))[0].kind, EdgeKind::Conflicts);
     }
 
     #[test]
     fn feature_affinity_edges_are_symmetric() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.3),
             kind: EdgeKind::FeatureAffinity,
         }];
         let g = CsrGraph::build(2, edges);
-        assert_eq!(g.neighbors(NodeId(0))[0].kind, EdgeKind::FeatureAffinity);
-        assert_eq!(g.neighbors(NodeId(1))[0].kind, EdgeKind::FeatureAffinity);
+        assert_eq!(
+            g.neighbors(NodeId::new(0))[0].kind,
+            EdgeKind::FeatureAffinity
+        );
+        assert_eq!(
+            g.neighbors(NodeId::new(1))[0].kind,
+            EdgeKind::FeatureAffinity
+        );
     }
 
     #[test]
     fn multiple_edges_from_same_node() {
         let edges = vec![
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(1),
+                source: NodeId::new(0),
+                target: NodeId::new(1),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
             },
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(2),
+                source: NodeId::new(0),
+                target: NodeId::new(2),
                 weight: weight(0.7),
                 kind: EdgeKind::Positive,
             },
         ];
         let g = CsrGraph::build(3, edges);
-        assert_eq!(g.neighbors(NodeId(0)).len(), 2);
-        assert_eq!(g.neighbors(NodeId(1)).len(), 1);
-        assert_eq!(g.neighbors(NodeId(2)).len(), 1);
+        assert_eq!(g.neighbors(NodeId::new(0)).len(), 2);
+        assert_eq!(g.neighbors(NodeId::new(1)).len(), 1);
+        assert_eq!(g.neighbors(NodeId::new(2)).len(), 1);
     }
 
     #[test]
     fn self_loop_stored_correctly() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(0),
+            source: NodeId::new(0),
+            target: NodeId::new(0),
             weight: weight(0.5),
             kind: EdgeKind::Positive,
         }];
         let g = CsrGraph::build(1, edges);
-        let n0 = g.neighbors(NodeId(0));
+        let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 2);
-        assert!(n0.iter().all(|e| e.target == NodeId(0)));
+        assert!(n0.iter().all(|e| e.target == NodeId::new(0)));
     }
 
     #[test]

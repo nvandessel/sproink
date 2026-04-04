@@ -15,6 +15,13 @@ pub struct HebbianConfig {
     pub activation_threshold: f64,
 }
 
+impl Default for HebbianConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CoActivationPair {
     pub node_a: NodeId,
     pub node_b: NodeId,
@@ -61,6 +68,7 @@ impl Learner for OjaLearner {
     }
 }
 
+#[must_use]
 pub fn extract_co_activation_pairs(
     results: &[ActivationResult],
     seed_nodes: &HashSet<NodeId>,
@@ -158,17 +166,17 @@ mod tests {
     fn extracts_pairs_above_threshold() {
         let results = vec![
             ActivationResult {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.5),
                 distance: 0,
             },
             ActivationResult {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.3),
                 distance: 1,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.1),
                 distance: 2,
             },
@@ -177,30 +185,30 @@ mod tests {
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
         let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].node_a, NodeId(0));
-        assert_eq!(pairs[0].node_b, NodeId(1));
+        assert_eq!(pairs[0].node_a, NodeId::new(0));
+        assert_eq!(pairs[0].node_b, NodeId::new(1));
     }
 
     #[test]
     fn excludes_seed_seed_pairs() {
         let results = vec![
             ActivationResult {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.8),
                 distance: 0,
             },
             ActivationResult {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.7),
                 distance: 0,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.6),
                 distance: 1,
             },
         ];
-        let seeds: HashSet<NodeId> = [NodeId(0), NodeId(1)].into();
+        let seeds: HashSet<NodeId> = [NodeId::new(0), NodeId::new(1)].into();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
         let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
         assert_eq!(pairs.len(), 2);
@@ -215,12 +223,12 @@ mod tests {
     fn canonical_ordering_a_less_than_b() {
         let results = vec![
             ActivationResult {
-                node: NodeId(5),
+                node: NodeId::new(5),
                 activation: act(0.5),
                 distance: 1,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.4),
                 distance: 1,
             },

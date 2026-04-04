@@ -48,7 +48,7 @@ fn round_trip_graph_build_activate_results() {
         sproink_results_distances(results, distances.as_mut_ptr());
 
         for &a in &activations {
-            assert!(a >= 0.0 && a <= 1.0);
+            assert!((0.0..=1.0).contains(&a));
         }
 
         sproink_results_free(results);
@@ -138,8 +138,8 @@ fn pairs_round_trip() {
             sproink_pairs_activations(pairs, acts_a.as_mut_ptr(), acts_b.as_mut_ptr());
 
             for (&a, &b) in acts_a.iter().zip(acts_b.iter()) {
-                assert!(a >= 0.0 && a <= 1.0);
-                assert!(b >= 0.0 && b <= 1.0);
+                assert!((0.0..=1.0).contains(&a));
+                assert!((0.0..=1.0).contains(&b));
             }
         }
 
@@ -153,7 +153,7 @@ fn pairs_round_trip() {
 fn oja_update_via_ffi() {
     unsafe {
         let w = sproink_oja_update(0.3, 0.8, 0.7, 0.05, 0.01, 0.95);
-        assert!(w >= 0.01 && w <= 0.95);
+        assert!((0.01..=0.95).contains(&w));
         assert!(w > 0.3); // should strengthen
     }
 }

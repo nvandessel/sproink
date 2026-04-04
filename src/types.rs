@@ -1,18 +1,40 @@
+use std::fmt;
+
 use crate::error::SproinkError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct NodeId(pub u32);
+pub struct NodeId(u32);
 
 impl NodeId {
     #[inline]
+    #[must_use]
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    #[must_use]
     pub fn get(self) -> u32 {
         self.0
     }
 
     #[inline]
+    #[must_use]
     pub fn index(self) -> usize {
         self.0 as usize
+    }
+}
+
+impl From<u32> for NodeId {
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -32,14 +54,22 @@ impl EdgeWeight {
     }
 
     #[inline]
+    #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
         Self(v)
     }
 
     #[inline]
+    #[must_use]
     pub fn get(self) -> f64 {
         self.0
+    }
+}
+
+impl fmt::Display for EdgeWeight {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -59,35 +89,64 @@ impl Activation {
     }
 
     #[inline]
+    #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
         Self(v)
     }
 
     #[inline]
+    #[must_use]
     pub fn get(self) -> f64 {
         self.0
     }
 }
 
+impl fmt::Display for Activation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct TagId(pub u32);
+pub struct TagId(u32);
 
 impl TagId {
     #[inline]
+    #[must_use]
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    #[must_use]
     pub fn get(self) -> u32 {
         self.0
     }
 }
 
+impl From<u32> for TagId {
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for TagId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Activation seed for the propagation engine.
+#[derive(Debug, Clone)]
 pub struct Seed {
     pub node: NodeId,
     pub activation: Activation,
 }
 
 /// Single node's result after propagation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActivationResult {
     pub node: NodeId,
     pub activation: Activation,
@@ -101,12 +160,12 @@ mod tests {
     // --- NodeId ---
     #[test]
     fn node_id_get_returns_inner() {
-        assert_eq!(NodeId(42).get(), 42);
+        assert_eq!(NodeId::new(42).get(), 42);
     }
 
     #[test]
     fn node_id_index_returns_usize() {
-        assert_eq!(NodeId(5).index(), 5usize);
+        assert_eq!(NodeId::new(5).index(), 5usize);
     }
 
     // --- EdgeWeight ---
@@ -172,17 +231,17 @@ mod tests {
     // --- TagId ---
     #[test]
     fn tag_id_get_returns_inner() {
-        assert_eq!(TagId(99).get(), 99);
+        assert_eq!(TagId::new(99).get(), 99);
     }
 
     // --- Seed ---
     #[test]
     fn seed_construction() {
         let s = Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: Activation::new(0.8).unwrap(),
         };
-        assert_eq!(s.node, NodeId(0));
+        assert_eq!(s.node, NodeId::new(0));
         assert_eq!(s.activation.get(), 0.8);
     }
 
@@ -190,11 +249,11 @@ mod tests {
     #[test]
     fn activation_result_construction() {
         let r = ActivationResult {
-            node: NodeId(5),
+            node: NodeId::new(5),
             activation: Activation::new(0.6).unwrap(),
             distance: 2,
         };
-        assert_eq!(r.node, NodeId(5));
+        assert_eq!(r.node, NodeId::new(5));
         assert_eq!(r.activation.get(), 0.6);
         assert_eq!(r.distance, 2);
     }

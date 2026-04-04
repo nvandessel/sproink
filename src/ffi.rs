@@ -57,8 +57,8 @@ pub unsafe extern "C" fn sproink_graph_build(
         for i in 0..n {
             let w = weights[i].clamp(0.0, 1.0);
             edges.push(EdgeInput {
-                source: NodeId(sources[i]),
-                target: NodeId(targets[i]),
+                source: NodeId::new(sources[i]),
+                target: NodeId::new(targets[i]),
                 weight: EdgeWeight::new_unchecked(w),
                 kind: edge_kind_from_u8(kinds[i]),
             });
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn sproink_activate(
                 .iter()
                 .zip(acts.iter())
                 .map(|(&node, &act)| Seed {
-                    node: NodeId(node),
+                    node: NodeId::new(node),
                     activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
                 })
                 .collect()
@@ -234,7 +234,7 @@ pub unsafe extern "C" fn sproink_extract_pairs(
 
         let seeds: HashSet<NodeId> = if num_seeds > 0 && !seed_nodes.is_null() {
             let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, num_seeds as usize) };
-            nodes.iter().map(|&n| NodeId(n)).collect()
+            nodes.iter().map(|&n| NodeId::new(n)).collect()
         } else {
             HashSet::new()
         };
