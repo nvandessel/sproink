@@ -1,15 +1,12 @@
+mod common;
+
 use sproink::*;
 use std::collections::HashSet;
 
-fn weight(v: f64) -> EdgeWeight {
-    EdgeWeight::new(v).unwrap()
-}
-fn act(v: f64) -> Activation {
-    Activation::new(v).unwrap()
-}
+use common::{act, weight};
 
 fn find(results: &[ActivationResult], id: u32) -> Option<&ActivationResult> {
-    results.iter().find(|r| r.node == NodeId(id))
+    results.iter().find(|r| r.node == NodeId::new(id))
 }
 
 /// 3-node chain: 0 -> 1 -> 2
@@ -18,14 +15,14 @@ fn find(results: &[ActivationResult], id: u32) -> Option<&ActivationResult> {
 fn three_node_chain_propagation() {
     let edges = vec![
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         },
         EdgeInput {
-            source: NodeId(1),
-            target: NodeId(2),
+            source: NodeId::new(1),
+            target: NodeId::new(2),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         },
@@ -37,7 +34,7 @@ fn three_node_chain_propagation() {
         .min_activation(0.001)
         .build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
     }];
     let results = engine.activate(&seeds, &config);
@@ -66,20 +63,20 @@ fn three_node_chain_propagation() {
 fn conflict_triangle() {
     let edges = vec![
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
         },
         EdgeInput {
-            source: NodeId(1),
-            target: NodeId(2),
+            source: NodeId::new(1),
+            target: NodeId::new(2),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
         },
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(2),
+            source: NodeId::new(0),
+            target: NodeId::new(2),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
         },
@@ -92,15 +89,15 @@ fn conflict_triangle() {
         .build();
     let seeds = vec![
         Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         },
         Seed {
-            node: NodeId(1),
+            node: NodeId::new(1),
             activation: act(1.0),
         },
         Seed {
-            node: NodeId(2),
+            node: NodeId::new(2),
             activation: act(1.0),
         },
     ];
@@ -118,8 +115,8 @@ fn conflict_triangle() {
 #[test]
 fn directional_override() {
     let edges = vec![EdgeInput {
-        source: NodeId(0),
-        target: NodeId(1),
+        source: NodeId::new(0),
+        target: NodeId::new(1),
         weight: weight(1.0),
         kind: EdgeKind::DirectionalSuppressive,
     }];
@@ -135,11 +132,11 @@ fn directional_override() {
         .build();
     let seeds = vec![
         Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(0.9),
         },
         Seed {
-            node: NodeId(1),
+            node: NodeId::new(1),
             activation: act(0.9),
         },
     ];
@@ -159,15 +156,15 @@ fn affinity_integration() {
     let edges = vec![
         // Real edges
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         },
         // Affinity edge
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(2),
+            source: NodeId::new(0),
+            target: NodeId::new(2),
             weight: weight(0.3),
             kind: EdgeKind::FeatureAffinity,
         },
@@ -179,7 +176,7 @@ fn affinity_integration() {
         .min_activation(0.001)
         .build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
     }];
     let results = engine.activate(&seeds, &config);
@@ -200,8 +197,8 @@ fn inhibition_plus_sigmoid() {
     let n = 6u32;
     let edges: Vec<EdgeInput> = (1..n)
         .map(|i| EdgeInput {
-            source: NodeId(0),
-            target: NodeId(i),
+            source: NodeId::new(0),
+            target: NodeId::new(i),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         })
@@ -214,14 +211,14 @@ fn inhibition_plus_sigmoid() {
         .inhibition(InhibitionConfig::builder().strength(0.5).breadth(2).build())
         .build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
     }];
     let results = engine.activate(&seeds, &config);
 
     // All results should be in [0, 1]
     for r in &results {
-        assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
+        assert!((0.0..=1.0).contains(&r.activation.get()));
     }
     // Results should be sorted
     for i in 1..results.len() {
@@ -234,14 +231,14 @@ fn inhibition_plus_sigmoid() {
 fn hebbian_round_trip() {
     let edges = vec![
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         },
         EdgeInput {
-            source: NodeId(0),
-            target: NodeId(2),
+            source: NodeId::new(0),
+            target: NodeId::new(2),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
         },
@@ -253,12 +250,12 @@ fn hebbian_round_trip() {
         .min_activation(0.001)
         .build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
     }];
     let results = engine.activate(&seeds, &config);
 
-    let seed_set: HashSet<NodeId> = [NodeId(0)].into();
+    let seed_set: HashSet<NodeId> = [NodeId::new(0)].into();
     let hebb_config = HebbianConfig::builder().activation_threshold(0.1).build();
     let pairs = extract_co_activation_pairs(&results, &seed_set, &hebb_config);
 
@@ -287,8 +284,8 @@ fn parallel_produces_valid_results() {
             let target = (i + j * 7 + 13) % num_nodes;
             if target != i {
                 edges.push(EdgeInput {
-                    source: NodeId(i),
-                    target: NodeId(target),
+                    source: NodeId::new(i),
+                    target: NodeId::new(target),
                     weight: weight(0.5),
                     kind: EdgeKind::Positive,
                 });
@@ -299,7 +296,7 @@ fn parallel_produces_valid_results() {
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder().build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
     }];
 
@@ -315,7 +312,7 @@ fn parallel_produces_valid_results() {
 
     // Bounds
     for r in &r1 {
-        assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
+        assert!((0.0..=1.0).contains(&r.activation.get()));
     }
 }
 

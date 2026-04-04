@@ -1,17 +1,9 @@
+#[allow(dead_code)]
+#[path = "../tests/common/mod.rs"]
+mod common;
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use sproink::*;
-
-fn build_chain(n: u32) -> CsrGraph {
-    let edges: Vec<EdgeInput> = (0..n - 1)
-        .map(|i| EdgeInput {
-            source: NodeId(i),
-            target: NodeId(i + 1),
-            weight: EdgeWeight::new(0.8).unwrap(),
-            kind: EdgeKind::Positive,
-        })
-        .collect();
-    CsrGraph::build(n, edges)
-}
 
 fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
     let mut edges = Vec::new();
@@ -20,8 +12,8 @@ fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
             let target = (i + j * 7 + 13) % num_nodes;
             if target != i {
                 edges.push(EdgeInput {
-                    source: NodeId(i),
-                    target: NodeId(target),
+                    source: NodeId::new(i),
+                    target: NodeId::new(target),
                     weight: EdgeWeight::new(0.5 + 0.3 * ((i + j) % 3) as f64 / 2.0).unwrap(),
                     kind: EdgeKind::Positive,
                 });
@@ -32,11 +24,11 @@ fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
 }
 
 fn bench_propagation(c: &mut Criterion) {
-    let g100 = build_chain(100);
+    let g100 = common::build_chain(100, 0.8);
     let e100 = Engine::new(g100);
     let config = PropagationConfig::builder().build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: Activation::new(1.0).unwrap(),
     }];
 

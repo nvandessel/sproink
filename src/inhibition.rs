@@ -8,6 +8,12 @@ pub struct InhibitionConfig {
     pub breadth: usize,
 }
 
+impl Default for InhibitionConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 pub trait Inhibitor: Send + Sync {
     fn inhibit(&self, activations: &mut [f64], config: &InhibitionConfig);
 }

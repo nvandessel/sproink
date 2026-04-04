@@ -52,15 +52,23 @@ pub struct PropagationConfig {
     pub inhibition: Option<InhibitionConfig>,
 }
 
+impl Default for PropagationConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 pub struct Engine<G: Graph> {
     graph: G,
 }
 
 impl<G: Graph> Engine<G> {
+    #[must_use]
     pub fn new(graph: G) -> Self {
         Engine { graph }
     }
 
+    #[must_use]
     pub fn activate(&self, seeds: &[Seed], config: &PropagationConfig) -> Vec<ActivationResult> {
         let n = self.graph.num_nodes() as usize;
 
@@ -99,7 +107,7 @@ impl<G: Graph> Engine<G> {
             .enumerate()
             .filter(|&(_, &a)| a > 0.0)
             .map(|(i, &a)| ActivationResult {
-                node: NodeId(i as u32),
+                node: NodeId::new(i as u32),
                 activation: Activation::new_unchecked(a),
                 distance: distance[i],
             })
@@ -144,7 +152,7 @@ impl<G: Graph> Engine<G> {
                 continue;
             }
 
-            let neighbors = self.graph.neighbors(NodeId(i as u32));
+            let neighbors = self.graph.neighbors(NodeId::new(i as u32));
             let counts = count_edge_kinds(neighbors);
 
             for edge in neighbors {
@@ -154,19 +162,19 @@ impl<G: Graph> Engine<G> {
 
                 match edge.kind {
                     EdgeKind::Positive => {
-                        let energy = base_energy / counts.positive as f64;
+                        let energy = base_energy / f64::from(counts.positive);
                         new[j] = new[j].max(energy);
                     }
                     EdgeKind::FeatureAffinity => {
-                        let energy = base_energy / counts.virtual_affinity as f64;
+                        let energy = base_energy / f64::from(counts.virtual_affinity);
                         new[j] = new[j].max(energy);
                     }
                     EdgeKind::Conflicts => {
-                        let energy = base_energy / counts.conflict as f64;
+                        let energy = base_energy / f64::from(counts.conflict);
                         new[j] = (new[j] - energy).max(0.0);
                     }
                     EdgeKind::DirectionalSuppressive => {
-                        let energy = base_energy / counts.dir_suppress as f64;
+                        let energy = base_energy / f64::from(counts.dir_suppress);
                         new[j] = (new[j] - energy).max(0.0);
                     }
                     EdgeKind::DirectionalPassive => continue,
@@ -207,7 +215,7 @@ impl<G: Graph> Engine<G> {
                     min_distance: vec![u32::MAX; n],
                 },
                 |mut local, i| {
-                    let neighbors = self.graph.neighbors(NodeId(i as u32));
+                    let neighbors = self.graph.neighbors(NodeId::new(i as u32));
                     let counts = count_edge_kinds(neighbors);
 
                     for edge in neighbors {
@@ -219,19 +227,19 @@ impl<G: Graph> Engine<G> {
 
                         match edge.kind {
                             EdgeKind::Positive => {
-                                let energy = base_energy / counts.positive as f64;
+                                let energy = base_energy / f64::from(counts.positive);
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                             }
                             EdgeKind::FeatureAffinity => {
-                                let energy = base_energy / counts.virtual_affinity as f64;
+                                let energy = base_energy / f64::from(counts.virtual_affinity);
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                             }
                             EdgeKind::Conflicts => {
-                                let energy = base_energy / counts.conflict as f64;
+                                let energy = base_energy / f64::from(counts.conflict);
                                 local.suppress_delta[j] += energy;
                             }
                             EdgeKind::DirectionalSuppressive => {
-                                let energy = base_energy / counts.dir_suppress as f64;
+                                let energy = base_energy / f64::from(counts.dir_suppress);
                                 local.suppress_delta[j] += energy;
                             }
                             EdgeKind::DirectionalPassive => continue,
@@ -288,8 +296,8 @@ mod tests {
     fn build_chain(n: u32, w: f64) -> CsrGraph {
         let edges: Vec<EdgeInput> = (0..n - 1)
             .map(|i| EdgeInput {
-                source: NodeId(i),
-                target: NodeId(i + 1),
+                source: NodeId::new(i),
+                target: NodeId::new(i + 1),
                 weight: weight(w),
                 kind: EdgeKind::Positive,
             })
@@ -310,12 +318,12 @@ mod tests {
             .sigmoid_center(0.3)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
-        assert!(results.iter().any(|r| r.node == NodeId(0)));
-        assert!(results.iter().any(|r| r.node == NodeId(1)));
+        assert!(results.iter().any(|r| r.node == NodeId::new(0)));
+        assert!(results.iter().any(|r| r.node == NodeId::new(1)));
     }
 
     #[test]
@@ -342,14 +350,14 @@ mod tests {
             .sigmoid_center(0.3)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
         let a = |id: u32| {
             results
                 .iter()
-                .find(|r| r.node == NodeId(id))
+                .find(|r| r.node == NodeId::new(id))
                 .map(|r| r.activation.get())
                 .unwrap_or(0.0)
         };
@@ -361,14 +369,14 @@ mod tests {
     fn conflict_suppresses_target() {
         let edges = vec![
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(1),
+                source: NodeId::new(0),
+                target: NodeId::new(1),
                 weight: weight(1.0),
                 kind: EdgeKind::Positive,
             },
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(2),
+                source: NodeId::new(0),
+                target: NodeId::new(2),
                 weight: weight(1.0),
                 kind: EdgeKind::Conflicts,
             },
@@ -385,11 +393,11 @@ mod tests {
             .build();
         let seeds = vec![
             Seed {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.8),
             },
             Seed {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.8),
             },
         ];
@@ -397,7 +405,7 @@ mod tests {
         let a = |id: u32| {
             results
                 .iter()
-                .find(|r| r.node == NodeId(id))
+                .find(|r| r.node == NodeId::new(id))
                 .map(|r| r.activation.get())
                 .unwrap_or(0.0)
         };
@@ -407,8 +415,8 @@ mod tests {
     #[test]
     fn directional_suppressive_only_forward() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::DirectionalSuppressive,
         }];
@@ -424,11 +432,11 @@ mod tests {
             .build();
         let seeds = vec![
             Seed {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.8),
             },
             Seed {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.8),
             },
         ];
@@ -436,7 +444,7 @@ mod tests {
         let a = |id: u32| {
             results
                 .iter()
-                .find(|r| r.node == NodeId(id))
+                .find(|r| r.node == NodeId::new(id))
                 .map(|r| r.activation.get())
                 .unwrap_or(0.0)
         };
@@ -448,14 +456,14 @@ mod tests {
     fn max_semantics_no_accumulation() {
         let edges = vec![
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(2),
+                source: NodeId::new(0),
+                target: NodeId::new(2),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
             },
             EdgeInput {
-                source: NodeId(1),
-                target: NodeId(2),
+                source: NodeId::new(1),
+                target: NodeId::new(2),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
             },
@@ -472,16 +480,16 @@ mod tests {
             .build();
         let seeds = vec![
             Seed {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.8),
             },
             Seed {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.8),
             },
         ];
         let results = engine.activate(&seeds, &config);
-        let node2 = results.iter().find(|r| r.node == NodeId(2)).unwrap();
+        let node2 = results.iter().find(|r| r.node == NodeId::new(2)).unwrap();
         assert!(node2.activation.get() < 0.9);
     }
 
@@ -491,7 +499,7 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
@@ -505,8 +513,8 @@ mod tests {
         let n = 5u32;
         let edges: Vec<EdgeInput> = (1..n)
             .map(|i| EdgeInput {
-                source: NodeId(0),
-                target: NodeId(i),
+                source: NodeId::new(0),
+                target: NodeId::new(i),
                 weight: weight(1.0),
                 kind: EdgeKind::Positive,
             })
@@ -515,11 +523,14 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().max_steps(1).build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
-        let tied: Vec<&ActivationResult> = results.iter().filter(|r| r.node != NodeId(0)).collect();
+        let tied: Vec<&ActivationResult> = results
+            .iter()
+            .filter(|r| r.node != NodeId::new(0))
+            .collect();
         for i in 1..tied.len() {
             if (tied[i - 1].activation.get() - tied[i].activation.get()).abs() < 1e-15 {
                 assert!(tied[i - 1].node.get() < tied[i].node.get());
@@ -536,14 +547,14 @@ mod tests {
             .min_activation(0.001)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
         let dist = |id: u32| {
             results
                 .iter()
-                .find(|r| r.node == NodeId(id))
+                .find(|r| r.node == NodeId::new(id))
                 .map(|r| r.distance)
         };
         assert_eq!(dist(0), Some(0));
@@ -555,8 +566,8 @@ mod tests {
     #[test]
     fn directional_passive_completely_skipped() {
         let edges = vec![EdgeInput {
-            source: NodeId(0),
-            target: NodeId(1),
+            source: NodeId::new(0),
+            target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::DirectionalSuppressive,
         }];
@@ -571,13 +582,13 @@ mod tests {
             .sigmoid_center(0.3)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(1),
+            node: NodeId::new(1),
             activation: act(0.9),
         }];
         let results = engine.activate(&seeds, &config);
         let a0 = results
             .iter()
-            .find(|r| r.node == NodeId(0))
+            .find(|r| r.node == NodeId::new(0))
             .map(|r| r.activation.get());
         if let Some(a0_val) = a0 {
             assert!(
@@ -601,13 +612,13 @@ mod tests {
             .sigmoid_center(0.3)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(0.9),
         }];
         let results = engine.activate(&seeds, &config);
         let a0 = results
             .iter()
-            .find(|r| r.node == NodeId(0))
+            .find(|r| r.node == NodeId::new(0))
             .unwrap()
             .activation
             .get();
@@ -623,7 +634,7 @@ mod tests {
             .min_activation(0.5)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
@@ -636,26 +647,26 @@ mod tests {
     fn four_denominator_normalization() {
         let edges = vec![
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(1),
+                source: NodeId::new(0),
+                target: NodeId::new(1),
                 weight: weight(0.8),
                 kind: EdgeKind::Positive,
             },
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(2),
+                source: NodeId::new(0),
+                target: NodeId::new(2),
                 weight: weight(0.8),
                 kind: EdgeKind::Positive,
             },
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(3),
+                source: NodeId::new(0),
+                target: NodeId::new(3),
                 weight: weight(0.8),
                 kind: EdgeKind::Conflicts,
             },
             EdgeInput {
-                source: NodeId(0),
-                target: NodeId(4),
+                source: NodeId::new(0),
+                target: NodeId::new(4),
                 weight: weight(0.8),
                 kind: EdgeKind::FeatureAffinity,
             },
@@ -667,7 +678,7 @@ mod tests {
             .min_activation(0.001)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
@@ -683,8 +694,8 @@ mod tests {
                 let target = (i + j * 7 + 13) % num_nodes;
                 if target != i {
                     edges.push(EdgeInput {
-                        source: NodeId(i),
-                        target: NodeId(target),
+                        source: NodeId::new(i),
+                        target: NodeId::new(target),
                         weight: weight(0.5),
                         kind: EdgeKind::Positive,
                     });
@@ -700,7 +711,7 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let r1 = engine.activate(&seeds, &config);
@@ -718,7 +729,7 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: act(1.0),
         }];
         let results = engine.activate(&seeds, &config);
@@ -740,18 +751,18 @@ mod tests {
         let config = PropagationConfig::builder().build();
         let seeds = vec![
             Seed {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(1.0),
             },
             Seed {
-                node: NodeId(500),
+                node: NodeId::new(500),
                 activation: act(0.8),
             },
         ];
         let results = engine.activate(&seeds, &config);
         for r in &results {
             assert!(
-                r.activation.get() >= 0.0 && r.activation.get() <= 1.0,
+                (0.0..=1.0).contains(&r.activation.get()),
                 "Activation {} out of bounds",
                 r.activation.get()
             );
