@@ -12,7 +12,7 @@ mod squash;
 mod types;
 
 pub use affinity::{AffinityConfig, AffinityGenerator, JaccardAffinity, jaccard_similarity};
-pub use engine::{Engine, PropagationConfig};
+pub use engine::{Engine, PropagationConfig, StepSnapshot};
 pub use error::SproinkError;
 pub use graph::{CsrGraph, EdgeData, EdgeInput, EdgeKind, Graph};
 pub use hebbian::{
