@@ -1,14 +1,28 @@
+//! CSR (Compressed Sparse Row) graph representation and edge types.
+//!
+//! The graph stores edges bidirectionally: each [`EdgeInput`] produces a forward
+//! and reverse edge. Directional-suppressive edges reverse to directional-passive.
+
 use std::fmt;
 
 use crate::types::{EdgeWeight, NodeId};
 
+/// The kind of relationship an edge represents.
+///
+/// Edge kinds determine how activation energy is propagated or suppressed
+/// during spreading activation.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeKind {
+    /// Standard excitatory edge — energy flows and accumulates via max.
     Positive = 0,
+    /// Mutual suppression — both endpoints reduce each other's activation.
     Conflicts = 1,
+    /// One-way suppression from source to target (reverse becomes [`DirectionalPassive`](EdgeKind::DirectionalPassive)).
     DirectionalSuppressive = 2,
+    /// Passive end of a directional-suppressive edge; no energy propagates.
     DirectionalPassive = 3,
+    /// Tag-similarity affinity edge; behaves like [`Positive`](EdgeKind::Positive) during propagation.
     FeatureAffinity = 4,
 }
 
@@ -33,28 +47,63 @@ impl EdgeKind {
     }
 }
 
+/// A stored edge in the CSR graph (target endpoint only; source is implicit).
 #[derive(Debug, Clone)]
 pub struct EdgeData {
+    /// The neighbor node this edge points to.
     pub target: NodeId,
+    /// Edge weight in `[0.0, 1.0]`.
     pub weight: EdgeWeight,
+    /// The kind of relationship this edge represents.
     pub kind: EdgeKind,
+    /// Optional timestamp of last activation (used for temporal decay).
     pub last_activated: Option<f64>,
 }
 
+/// An edge to insert when building a graph.
+///
+/// Each `EdgeInput` produces two stored edges (forward and reverse).
 #[derive(Debug, Clone)]
 pub struct EdgeInput {
+    /// Source node of the edge.
     pub source: NodeId,
+    /// Target node of the edge.
     pub target: NodeId,
+    /// Edge weight in `[0.0, 1.0]`.
     pub weight: EdgeWeight,
+    /// The kind of relationship.
     pub kind: EdgeKind,
+    /// Optional timestamp of last activation (for temporal decay).
     pub last_activated: Option<f64>,
 }
 
+/// Trait abstracting graph access for the propagation engine.
 pub trait Graph: Send + Sync {
+    /// Returns the total number of nodes in the graph.
     fn num_nodes(&self) -> u32;
+    /// Returns the outgoing edges for the given node.
     fn neighbors(&self, node: NodeId) -> &[EdgeData];
 }
 
+/// Compressed Sparse Row graph — the default high-performance graph backend.
+///
+/// Built once via [`CsrGraph::build()`] and then immutably shared with the engine.
+///
+/// # Examples
+///
+/// ```
+/// use sproink::{CsrGraph, EdgeInput, EdgeKind, EdgeWeight, Graph, NodeId};
+///
+/// let graph = CsrGraph::build(2, vec![EdgeInput {
+///     source: NodeId::new(0),
+///     target: NodeId::new(1),
+///     weight: EdgeWeight::new(0.5).unwrap(),
+///     kind: EdgeKind::Positive,
+///     last_activated: None,
+/// }]);
+///
+/// assert_eq!(graph.num_nodes(), 2);
+/// ```
 pub struct CsrGraph {
     num_nodes: u32,
     row_offsets: Vec<u32>,
@@ -71,6 +120,10 @@ impl fmt::Debug for CsrGraph {
 }
 
 impl CsrGraph {
+    /// Builds a CSR graph from a list of edge inputs.
+    ///
+    /// Each input edge is stored bidirectionally. Directional-suppressive edges
+    /// have their reverse stored as directional-passive.
     #[must_use]
     pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Self {
         // Count edges per node (each input produces 2 stored edges)

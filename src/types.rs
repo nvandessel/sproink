@@ -1,24 +1,35 @@
+//! Core newtypes for the sproink engine.
+//!
+//! All numeric values are wrapped in newtypes to prevent mixing node IDs,
+//! edge weights, and activation levels at the type level.
+
 use std::fmt;
 
 use crate::error::SproinkError;
 
+/// Unique identifier for a node in the graph.
+///
+/// Wraps a `u32` and provides [`index()`](NodeId::index) for use as a slice index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct NodeId(u32);
 
 impl NodeId {
+    /// Creates a new `NodeId` from a raw `u32`.
     #[inline]
     #[must_use]
     pub fn new(id: u32) -> Self {
         Self(id)
     }
 
+    /// Returns the inner `u32` value.
     #[inline]
     #[must_use]
     pub fn get(self) -> u32 {
         self.0
     }
 
+    /// Returns the node ID as a `usize` index for array/slice access.
     #[inline]
     #[must_use]
     pub fn index(self) -> usize {
@@ -38,11 +49,17 @@ impl fmt::Display for NodeId {
     }
 }
 
+/// Edge weight in the range `[0.0, 1.0]`.
+///
+/// Construction via [`new()`](EdgeWeight::new) validates the range; use
+/// [`new_unchecked()`](EdgeWeight::new_unchecked) when the value is known-good.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct EdgeWeight(f64);
 
 impl EdgeWeight {
+    /// Creates a validated edge weight. Returns an error if the value is
+    /// NaN, infinite, or outside `[0.0, 1.0]`.
     pub fn new(v: f64) -> Result<Self, SproinkError> {
         if v.is_nan() || v.is_infinite() || !(0.0..=1.0).contains(&v) {
             return Err(SproinkError::InvalidValue {
@@ -53,6 +70,7 @@ impl EdgeWeight {
         Ok(Self(v))
     }
 
+    /// Creates an edge weight without validation. Debug builds panic on invalid values.
     #[inline]
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
@@ -60,6 +78,7 @@ impl EdgeWeight {
         Self(v)
     }
 
+    /// Returns the inner `f64` value.
     #[inline]
     #[must_use]
     pub fn get(self) -> f64 {
@@ -73,11 +92,16 @@ impl fmt::Display for EdgeWeight {
     }
 }
 
+/// Activation level in the range `[0.0, 1.0]`.
+///
+/// Represents the energy at a node during or after propagation.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct Activation(f64);
 
 impl Activation {
+    /// Creates a validated activation. Returns an error if the value is
+    /// NaN, infinite, or outside `[0.0, 1.0]`.
     pub fn new(v: f64) -> Result<Self, SproinkError> {
         if v.is_nan() || v.is_infinite() || !(0.0..=1.0).contains(&v) {
             return Err(SproinkError::InvalidValue {
@@ -88,6 +112,7 @@ impl Activation {
         Ok(Self(v))
     }
 
+    /// Creates an activation without validation. Debug builds panic on invalid values.
     #[inline]
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
@@ -95,6 +120,7 @@ impl Activation {
         Self(v)
     }
 
+    /// Returns the inner `f64` value.
     #[inline]
     #[must_use]
     pub fn get(self) -> f64 {
@@ -108,17 +134,20 @@ impl fmt::Display for Activation {
     }
 }
 
+/// Unique identifier for a tag used in affinity calculations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct TagId(u32);
 
 impl TagId {
+    /// Creates a new `TagId` from a raw `u32`.
     #[inline]
     #[must_use]
     pub fn new(id: u32) -> Self {
         Self(id)
     }
 
+    /// Returns the inner `u32` value.
     #[inline]
     #[must_use]
     pub fn get(self) -> u32 {
@@ -139,19 +168,31 @@ impl fmt::Display for TagId {
 }
 
 /// Activation seed for the propagation engine.
+///
+/// Each seed injects energy into a single node. The optional `source` field
+/// tags which external entity originated this seed (for provenance tracking).
 #[derive(Debug, Clone)]
 pub struct Seed {
+    /// The node to inject activation into.
     pub node: NodeId,
+    /// Initial activation level for the seed node.
     pub activation: Activation,
+    /// Optional identifier for the external source that produced this seed.
     pub source: Option<u32>,
 }
 
-/// Single node's result after propagation.
+/// A single node's activation after propagation completes.
+///
+/// Results are sorted by activation descending, with ties broken by node ID ascending.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivationResult {
+    /// The activated node.
     pub node: NodeId,
+    /// Final activation level after all post-processing.
     pub activation: Activation,
+    /// Shortest hop distance from the nearest seed node.
     pub distance: u32,
+    /// Source identifier inherited from the seed that reached this node first.
     pub seed_source: Option<u32>,
 }
 
