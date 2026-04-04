@@ -1,11 +1,12 @@
 use rayon::prelude::*;
 use typed_builder::TypedBuilder;
 
+use crate::affinity::{AffinityConfig, jaccard_similarity};
 use crate::error::SproinkError;
 use crate::graph::{EdgeData, EdgeKind, Graph};
 use crate::inhibition::{InhibitionConfig, Inhibitor, TopMInhibitor};
 use crate::squash::squash_sigmoid;
-use crate::types::{Activation, ActivationResult, NodeId, Seed};
+use crate::types::{Activation, ActivationResult, NodeId, Seed, TagId};
 
 struct EdgeKindCounts {
     positive: u32,
@@ -95,10 +96,61 @@ impl<G: Graph> Engine<G> {
         seeds: &[Seed],
         config: &PropagationConfig,
     ) -> Result<Vec<ActivationResult>, SproinkError> {
+        let (results, _) = self.activate_inner(seeds, config, None, false)?;
+        Ok(results)
+    }
+
+    pub fn activate_with_steps(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+    ) -> Result<Vec<StepSnapshot>, SproinkError> {
+        let (_, snapshots) = self.activate_inner(seeds, config, None, true)?;
+        Ok(snapshots.unwrap())
+    }
+
+    pub fn activate_with_affinity(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+        tag_sets: &[Vec<TagId>],
+        affinity_config: &AffinityConfig,
+    ) -> Result<Vec<ActivationResult>, SproinkError> {
+        let (results, _) =
+            self.activate_inner(seeds, config, Some((tag_sets, affinity_config)), false)?;
+        Ok(results)
+    }
+
+    pub fn activate_with_steps_and_affinity(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+        tag_sets: &[Vec<TagId>],
+        affinity_config: &AffinityConfig,
+    ) -> Result<Vec<StepSnapshot>, SproinkError> {
+        let (_, snapshots) =
+            self.activate_inner(seeds, config, Some((tag_sets, affinity_config)), true)?;
+        Ok(snapshots.unwrap())
+    }
+
+    fn activate_inner(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
+        collect_steps: bool,
+    ) -> Result<(Vec<ActivationResult>, Option<Vec<StepSnapshot>>), SproinkError> {
         Self::validate_config(config)?;
+        if let Some((tag_sets, _)) = affinity
+            && tag_sets.len() != self.graph.num_nodes() as usize
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "tag_sets",
+                value: tag_sets.len() as f64,
+            });
+        }
 
         let n = self.graph.num_nodes() as usize;
-
         let mut current = vec![0.0f64; n];
         let mut next = vec![0.0f64; n];
         let mut distance = vec![u32::MAX; n];
@@ -113,7 +165,27 @@ impl<G: Graph> Engine<G> {
             }
         }
 
-        for _step in 0..config.max_steps {
+        let mut snapshots = if collect_steps {
+            let mut snaps = Vec::with_capacity(config.max_steps as usize + 2);
+            // Step 0: snapshot seed state (ALL seeded nodes regardless of min_activation)
+            let mut step0: Vec<(NodeId, f64)> = current
+                .iter()
+                .enumerate()
+                .filter(|&(_, &a)| a > 0.0)
+                .map(|(i, &a)| (NodeId::new(i as u32), a))
+                .collect();
+            Self::sort_snapshot(&mut step0);
+            snaps.push(StepSnapshot {
+                step: 0,
+                activations: step0,
+                is_final: false,
+            });
+            Some(snaps)
+        } else {
+            None
+        };
+
+        for step in 0..config.max_steps {
             next.copy_from_slice(&current);
             self.propagate_step(
                 &current,
@@ -121,20 +193,50 @@ impl<G: Graph> Engine<G> {
                 &mut distance,
                 &mut seed_sources,
                 config,
+                affinity,
             );
             std::mem::swap(&mut current, &mut next);
+
+            if let Some(ref mut snaps) = snapshots {
+                let mut snap: Vec<(NodeId, f64)> = current
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &a)| a >= config.min_activation)
+                    .map(|(i, &a)| (NodeId::new(i as u32), a))
+                    .collect();
+                Self::sort_snapshot(&mut snap);
+                snaps.push(StepSnapshot {
+                    step: step + 1,
+                    activations: snap,
+                    is_final: false,
+                });
+            }
         }
 
+        // Post-process
         if let Some(ref inh_config) = config.inhibition {
             TopMInhibitor.inhibit(&mut current, inh_config);
         }
-
         squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
-
         for v in current.iter_mut() {
             if *v < config.min_activation {
                 *v = 0.0;
             }
+        }
+
+        if let Some(ref mut snaps) = snapshots {
+            let mut final_snap: Vec<(NodeId, f64)> = current
+                .iter()
+                .enumerate()
+                .filter(|&(_, &a)| a > 0.0)
+                .map(|(i, &a)| (NodeId::new(i as u32), a))
+                .collect();
+            Self::sort_snapshot(&mut final_snap);
+            snaps.push(StepSnapshot {
+                step: config.max_steps + 1,
+                activations: final_snap,
+                is_final: true,
+            });
         }
 
         let mut results: Vec<ActivationResult> = current
@@ -157,98 +259,7 @@ impl<G: Graph> Engine<G> {
                 .then(a.node.cmp(&b.node))
         });
 
-        Ok(results)
-    }
-
-    pub fn activate_with_steps(
-        &self,
-        seeds: &[Seed],
-        config: &PropagationConfig,
-    ) -> Result<Vec<StepSnapshot>, SproinkError> {
-        Self::validate_config(config)?;
-
-        let n = self.graph.num_nodes() as usize;
-        let mut snapshots = Vec::with_capacity(config.max_steps as usize + 2);
-
-        let mut current = vec![0.0f64; n];
-        let mut next = vec![0.0f64; n];
-        let mut distances = vec![u32::MAX; n];
-        let mut seed_sources: Vec<Option<u32>> = vec![None; n];
-
-        for seed in seeds {
-            let idx = seed.node.index();
-            if idx < n {
-                current[idx] = seed.activation.get();
-                distances[idx] = 0;
-                seed_sources[idx] = seed.source;
-            }
-        }
-
-        // Step 0: snapshot seed state (ALL seeded nodes regardless of min_activation)
-        let mut step0: Vec<(NodeId, f64)> = current
-            .iter()
-            .enumerate()
-            .filter(|&(_, &a)| a > 0.0)
-            .map(|(i, &a)| (NodeId::new(i as u32), a))
-            .collect();
-        Self::sort_snapshot(&mut step0);
-        snapshots.push(StepSnapshot {
-            step: 0,
-            activations: step0,
-            is_final: false,
-        });
-
-        // Steps 1..max_steps
-        for step in 0..config.max_steps {
-            next.copy_from_slice(&current);
-            self.propagate_step(
-                &current,
-                &mut next,
-                &mut distances,
-                &mut seed_sources,
-                config,
-            );
-            std::mem::swap(&mut current, &mut next);
-
-            let mut snap: Vec<(NodeId, f64)> = current
-                .iter()
-                .enumerate()
-                .filter(|&(_, &a)| a >= config.min_activation)
-                .map(|(i, &a)| (NodeId::new(i as u32), a))
-                .collect();
-            Self::sort_snapshot(&mut snap);
-            snapshots.push(StepSnapshot {
-                step: step + 1,
-                activations: snap,
-                is_final: false,
-            });
-        }
-
-        // Final: post-process (inhibition + sigmoid + prune)
-        if let Some(ref inh_config) = config.inhibition {
-            TopMInhibitor.inhibit(&mut current, inh_config);
-        }
-        squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
-        for v in current.iter_mut() {
-            if *v < config.min_activation {
-                *v = 0.0;
-            }
-        }
-
-        let mut final_snap: Vec<(NodeId, f64)> = current
-            .iter()
-            .enumerate()
-            .filter(|&(_, &a)| a > 0.0)
-            .map(|(i, &a)| (NodeId::new(i as u32), a))
-            .collect();
-        Self::sort_snapshot(&mut final_snap);
-        snapshots.push(StepSnapshot {
-            step: config.max_steps + 1,
-            activations: final_snap,
-            is_final: true,
-        });
-
-        Ok(snapshots)
+        Ok((results, snapshots))
     }
 
     fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
@@ -276,11 +287,12 @@ impl<G: Graph> Engine<G> {
         distances: &mut [u32],
         seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
+        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
     ) {
         if self.graph.num_nodes() < PARALLEL_THRESHOLD {
-            self.propagate_step_sequential(current, new, distances, seed_sources, config);
+            self.propagate_step_sequential(current, new, distances, seed_sources, config, affinity);
         } else {
-            self.propagate_step_parallel(current, new, distances, seed_sources, config);
+            self.propagate_step_parallel(current, new, distances, seed_sources, config, affinity);
         }
     }
 
@@ -291,6 +303,7 @@ impl<G: Graph> Engine<G> {
         distances: &mut [u32],
         seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
+        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
     ) {
         let n = self.graph.num_nodes() as usize;
 
@@ -343,6 +356,35 @@ impl<G: Graph> Engine<G> {
                     }
                 }
             }
+
+            // Virtual affinity edges
+            if let Some((tag_sets, aff_config)) = affinity {
+                let mut virtual_edges: Vec<(usize, f64)> = Vec::new();
+                for j in 0..n {
+                    if j == i {
+                        continue;
+                    }
+                    let sim = jaccard_similarity(&tag_sets[i], &tag_sets[j]);
+                    if sim >= aff_config.min_jaccard {
+                        virtual_edges.push((j, sim * aff_config.max_weight));
+                    }
+                }
+                let virtual_count = virtual_edges.len();
+                if virtual_count > 0 {
+                    for &(j, vw) in &virtual_edges {
+                        let energy = current[i] * config.spread_factor * vw * config.decay_factor
+                            / virtual_count as f64;
+                        new[j] = new[j].max(energy);
+                        if distances[i] != u32::MAX {
+                            let candidate = distances[i] + 1;
+                            if candidate < distances[j] {
+                                distances[j] = candidate;
+                                seed_sources[j] = seed_sources[i];
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -353,6 +395,7 @@ impl<G: Graph> Engine<G> {
         distances: &mut [u32],
         seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
+        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
     ) {
         let n = self.graph.num_nodes() as usize;
 
@@ -416,6 +459,36 @@ impl<G: Graph> Engine<G> {
                             if candidate < local.min_distance[j] {
                                 local.min_distance[j] = candidate;
                                 local.seed_source[j] = seed_sources[i];
+                            }
+                        }
+                    }
+
+                    // Virtual affinity edges
+                    if let Some((tag_sets, aff_config)) = affinity {
+                        let mut virtual_edges: Vec<(usize, f64)> = Vec::new();
+                        for j in 0..n {
+                            if j == i {
+                                continue;
+                            }
+                            let sim = jaccard_similarity(&tag_sets[i], &tag_sets[j]);
+                            if sim >= aff_config.min_jaccard {
+                                virtual_edges.push((j, sim * aff_config.max_weight));
+                            }
+                        }
+                        let virtual_count = virtual_edges.len();
+                        if virtual_count > 0 {
+                            for &(j, vw) in &virtual_edges {
+                                let energy =
+                                    current[i] * config.spread_factor * vw * config.decay_factor
+                                        / virtual_count as f64;
+                                local.positive_max[j] = local.positive_max[j].max(energy);
+                                if distances[i] != u32::MAX {
+                                    let candidate = distances[i] + 1;
+                                    if candidate < local.min_distance[j] {
+                                        local.min_distance[j] = candidate;
+                                        local.seed_source[j] = seed_sources[i];
+                                    }
+                                }
                             }
                         }
                     }
@@ -1241,5 +1314,208 @@ mod tests {
             source: None,
         }];
         assert!(engine.activate(&seeds, &config).is_err());
+    }
+
+    // --- Dynamic affinity ---
+
+    #[test]
+    fn dynamic_affinity_activates_isolated_node() {
+        // Chain: 0 -- 1 -- 2, node 3 isolated
+        // Node 2 and node 3 share tags -> virtual edge
+        let edges = vec![
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(1),
+                weight: weight(0.8),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(1),
+                target: NodeId::new(2),
+                weight: weight(0.8),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+        ];
+        let graph = CsrGraph::build(4, edges);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // Without affinity: node 3 should have no activation
+        let results_no_aff = engine.activate(&seeds, &config).unwrap();
+        let a3_none = results_no_aff
+            .iter()
+            .find(|r| r.node == NodeId::new(3))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        assert!(
+            a3_none < 0.001,
+            "Node 3 should be inactive without affinity"
+        );
+
+        // With affinity: node 3 should get activation via virtual edge from node 2
+        let tag_sets = vec![
+            vec![],                                            // node 0
+            vec![],                                            // node 1
+            vec![TagId::new(1), TagId::new(2), TagId::new(3)], // node 2
+            vec![TagId::new(1), TagId::new(2), TagId::new(3)], // node 3: same tags as node 2
+        ];
+        let aff_config = AffinityConfig::builder()
+            .min_jaccard(0.3)
+            .max_weight(0.8)
+            .build();
+        let results_aff = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+        let a3_aff = results_aff
+            .iter()
+            .find(|r| r.node == NodeId::new(3))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        assert!(
+            a3_aff > 0.001,
+            "Node 3 should be active with affinity, got {a3_aff}"
+        );
+    }
+
+    #[test]
+    fn dynamic_affinity_separate_denominator() {
+        // Node 0 -> Node 1 (real), Node 0 -> Node 2 (virtual via tags)
+        // Virtual edges should use their own denominator
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        }];
+        let graph = CsrGraph::build(3, edges);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        let tag_sets = vec![
+            vec![TagId::new(1), TagId::new(2)], // node 0
+            vec![],                             // node 1
+            vec![TagId::new(1), TagId::new(2)], // node 2: same tags as node 0
+        ];
+        let aff_config = AffinityConfig::builder()
+            .min_jaccard(0.3)
+            .max_weight(0.5)
+            .build();
+        let results = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+
+        // Both nodes should have activation
+        assert!(results.iter().any(|r| r.node == NodeId::new(1)));
+        assert!(results.iter().any(|r| r.node == NodeId::new(2)));
+    }
+
+    #[test]
+    fn dynamic_affinity_empty_tags_no_virtual_edges() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // All empty tag sets -> no virtual edges -> same as activate()
+        let tag_sets: Vec<Vec<TagId>> = vec![vec![], vec![], vec![]];
+        let aff_config = AffinityConfig::builder().build();
+        let results_aff = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+        let results_plain = engine.activate(&seeds, &config).unwrap();
+        assert_eq!(results_aff.len(), results_plain.len());
+    }
+
+    #[test]
+    fn dynamic_affinity_wrong_tag_sets_len_errors() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder().build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // tag_sets length doesn't match num_nodes
+        let tag_sets: Vec<Vec<TagId>> = vec![vec![], vec![]]; // 2 instead of 3
+        let aff_config = AffinityConfig::builder().build();
+        assert!(
+            engine
+                .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn activate_with_steps_and_affinity_final_matches() {
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        }];
+        let graph = CsrGraph::build(3, edges);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(2)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let tag_sets = vec![vec![TagId::new(1)], vec![], vec![TagId::new(1)]];
+        let aff_config = AffinityConfig::builder()
+            .min_jaccard(0.3)
+            .max_weight(0.5)
+            .build();
+
+        let results = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+        let snapshots = engine
+            .activate_with_steps_and_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+
+        let final_snap = snapshots.last().unwrap();
+        assert!(final_snap.is_final);
+        assert_eq!(final_snap.activations.len(), results.len());
+        for (i, (node, act_val)) in final_snap.activations.iter().enumerate() {
+            assert_eq!(*node, results[i].node);
+            assert!(
+                (act_val - results[i].activation.get()).abs() < 1e-15,
+                "Mismatch at {i}: {act_val} vs {}",
+                results[i].activation.get()
+            );
+        }
     }
 }
