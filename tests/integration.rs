@@ -19,12 +19,14 @@ fn three_node_chain_propagation() {
             target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         },
         EdgeInput {
             source: NodeId::new(1),
             target: NodeId::new(2),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         },
     ];
     let graph = CsrGraph::build(3, edges);
@@ -38,7 +40,7 @@ fn three_node_chain_propagation() {
         activation: act(1.0),
         source: None,
     }];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     // All 3 nodes should be active
     assert!(find(&results, 0).is_some());
@@ -68,18 +70,21 @@ fn conflict_triangle() {
             target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
+            last_activated: None,
         },
         EdgeInput {
             source: NodeId::new(1),
             target: NodeId::new(2),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
+            last_activated: None,
         },
         EdgeInput {
             source: NodeId::new(0),
             target: NodeId::new(2),
             weight: weight(1.0),
             kind: EdgeKind::Conflicts,
+            last_activated: None,
         },
     ];
     let graph = CsrGraph::build(3, edges);
@@ -105,7 +110,7 @@ fn conflict_triangle() {
             source: None,
         },
     ];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     // Mutual suppression should reduce activations from their seed values
     for r in &results {
@@ -123,6 +128,7 @@ fn directional_override() {
         target: NodeId::new(1),
         weight: weight(1.0),
         kind: EdgeKind::DirectionalSuppressive,
+        last_activated: None,
     }];
     let graph = CsrGraph::build(2, edges);
     let engine = Engine::new(graph);
@@ -146,7 +152,7 @@ fn directional_override() {
             source: None,
         },
     ];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     let a0 = find(&results, 0).map(|r| r.activation.get()).unwrap_or(0.0);
     let a1 = find(&results, 1).map(|r| r.activation.get()).unwrap_or(0.0);
@@ -166,6 +172,7 @@ fn affinity_integration() {
             target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         },
         // Affinity edge
         EdgeInput {
@@ -173,6 +180,7 @@ fn affinity_integration() {
             target: NodeId::new(2),
             weight: weight(0.3),
             kind: EdgeKind::FeatureAffinity,
+            last_activated: None,
         },
     ];
     let graph = CsrGraph::build(3, edges);
@@ -186,7 +194,7 @@ fn affinity_integration() {
         activation: act(1.0),
         source: None,
     }];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     // Both nodes should receive energy
     assert!(find(&results, 1).is_some());
@@ -208,6 +216,7 @@ fn inhibition_plus_sigmoid() {
             target: NodeId::new(i),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         })
         .collect();
     let graph = CsrGraph::build(n, edges);
@@ -222,7 +231,7 @@ fn inhibition_plus_sigmoid() {
         activation: act(1.0),
         source: None,
     }];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     // All results should be in [0, 1]
     for r in &results {
@@ -243,12 +252,14 @@ fn hebbian_round_trip() {
             target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         },
         EdgeInput {
             source: NodeId::new(0),
             target: NodeId::new(2),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         },
     ];
     let graph = CsrGraph::build(3, edges);
@@ -262,7 +273,7 @@ fn hebbian_round_trip() {
         activation: act(1.0),
         source: None,
     }];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
 
     let seed_set: HashSet<NodeId> = [NodeId::new(0)].into();
     let hebb_config = HebbianConfig::builder().activation_threshold(0.1).build();
@@ -297,6 +308,7 @@ fn parallel_produces_valid_results() {
                     target: NodeId::new(target),
                     weight: weight(0.5),
                     kind: EdgeKind::Positive,
+                    last_activated: None,
                 });
             }
         }
@@ -310,8 +322,8 @@ fn parallel_produces_valid_results() {
         source: None,
     }];
 
-    let r1 = engine.activate(&seeds, &config);
-    let r2 = engine.activate(&seeds, &config);
+    let r1 = engine.activate(&seeds, &config).unwrap();
+    let r2 = engine.activate(&seeds, &config).unwrap();
 
     // Determinism
     assert_eq!(r1.len(), r2.len());

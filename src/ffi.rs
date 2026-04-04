@@ -61,6 +61,7 @@ pub unsafe extern "C" fn sproink_graph_build(
                 target: NodeId::new(targets[i]),
                 weight: EdgeWeight::new_unchecked(w),
                 kind: edge_kind_from_u8(kinds[i]),
+                last_activated: None,
             });
         }
 
@@ -140,10 +141,15 @@ pub unsafe extern "C" fn sproink_activate(
             sigmoid_gain,
             sigmoid_center,
             inhibition,
+            temporal_decay_rate: None,
+            current_time: None,
         };
 
         let engine = Engine::new(graph_ref);
-        let results = engine.activate(&seeds, &config);
+        let results = match engine.activate(&seeds, &config) {
+            Ok(r) => r,
+            Err(_) => return std::ptr::null_mut(),
+        };
 
         Box::into_raw(Box::new(SproinkResults { results }))
     })) {

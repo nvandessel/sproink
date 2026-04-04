@@ -1,6 +1,7 @@
 use rayon::prelude::*;
 use typed_builder::TypedBuilder;
 
+use crate::error::SproinkError;
 use crate::graph::{EdgeData, EdgeKind, Graph};
 use crate::inhibition::{InhibitionConfig, Inhibitor, TopMInhibitor};
 use crate::squash::squash_sigmoid;
@@ -34,6 +35,16 @@ fn count_edge_kinds(neighbors: &[EdgeData]) -> EdgeKindCounts {
 
 const PARALLEL_THRESHOLD: u32 = 1024;
 
+fn temporal_weight(base_weight: f64, last_activated: Option<f64>, rho: f64, t_now: f64) -> f64 {
+    match last_activated {
+        Some(t_edge) => {
+            let elapsed = (t_now - t_edge).max(0.0);
+            base_weight * (-rho * elapsed).exp()
+        }
+        None => base_weight,
+    }
+}
+
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct PropagationConfig {
     #[builder(default = 3)]
@@ -50,6 +61,10 @@ pub struct PropagationConfig {
     pub sigmoid_center: f64,
     #[builder(default, setter(strip_option))]
     pub inhibition: Option<InhibitionConfig>,
+    #[builder(default, setter(strip_option))]
+    pub temporal_decay_rate: Option<f64>,
+    #[builder(default, setter(strip_option))]
+    pub current_time: Option<f64>,
 }
 
 impl Default for PropagationConfig {
@@ -75,8 +90,13 @@ impl<G: Graph> Engine<G> {
         Engine { graph }
     }
 
-    #[must_use]
-    pub fn activate(&self, seeds: &[Seed], config: &PropagationConfig) -> Vec<ActivationResult> {
+    pub fn activate(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+    ) -> Result<Vec<ActivationResult>, SproinkError> {
+        Self::validate_config(config)?;
+
         let n = self.graph.num_nodes() as usize;
 
         let mut current = vec![0.0f64; n];
@@ -137,15 +157,16 @@ impl<G: Graph> Engine<G> {
                 .then(a.node.cmp(&b.node))
         });
 
-        results
+        Ok(results)
     }
 
-    #[must_use]
     pub fn activate_with_steps(
         &self,
         seeds: &[Seed],
         config: &PropagationConfig,
-    ) -> Vec<StepSnapshot> {
+    ) -> Result<Vec<StepSnapshot>, SproinkError> {
+        Self::validate_config(config)?;
+
         let n = self.graph.num_nodes() as usize;
         let mut snapshots = Vec::with_capacity(config.max_steps as usize + 2);
 
@@ -227,7 +248,17 @@ impl<G: Graph> Engine<G> {
             is_final: true,
         });
 
-        snapshots
+        Ok(snapshots)
+    }
+
+    fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
+        if config.temporal_decay_rate.is_some() && config.current_time.is_none() {
+            return Err(SproinkError::InvalidValue {
+                field: "current_time",
+                value: 0.0,
+            });
+        }
+        Ok(())
     }
 
     fn sort_snapshot(snap: &mut [(NodeId, f64)]) {
@@ -272,8 +303,16 @@ impl<G: Graph> Engine<G> {
             let counts = count_edge_kinds(neighbors);
 
             for edge in neighbors {
-                let base_energy =
-                    current[i] * config.spread_factor * edge.weight.get() * config.decay_factor;
+                let w = match config.temporal_decay_rate {
+                    Some(rho) => temporal_weight(
+                        edge.weight.get(),
+                        edge.last_activated,
+                        rho,
+                        config.current_time.unwrap(),
+                    ),
+                    None => edge.weight.get(),
+                };
+                let base_energy = current[i] * config.spread_factor * w * config.decay_factor;
                 let j = edge.target.index();
 
                 match edge.kind {
@@ -339,10 +378,17 @@ impl<G: Graph> Engine<G> {
                     let counts = count_edge_kinds(neighbors);
 
                     for edge in neighbors {
-                        let base_energy = current[i]
-                            * config.spread_factor
-                            * edge.weight.get()
-                            * config.decay_factor;
+                        let w = match config.temporal_decay_rate {
+                            Some(rho) => temporal_weight(
+                                edge.weight.get(),
+                                edge.last_activated,
+                                rho,
+                                config.current_time.unwrap(),
+                            ),
+                            None => edge.weight.get(),
+                        };
+                        let base_energy =
+                            current[i] * config.spread_factor * w * config.decay_factor;
                         let j = edge.target.index();
 
                         match edge.kind {
@@ -443,6 +489,7 @@ mod tests {
                 target: NodeId::new(i + 1),
                 weight: weight(w),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             })
             .collect();
         CsrGraph::build(n, edges)
@@ -465,7 +512,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         assert!(results.iter().any(|r| r.node == NodeId::new(0)));
         assert!(results.iter().any(|r| r.node == NodeId::new(1)));
     }
@@ -475,7 +522,7 @@ mod tests {
         let graph = build_chain(5, 0.8);
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
-        let results = engine.activate(&[], &config);
+        let results = engine.activate(&[], &config).unwrap();
         for r in &results {
             assert!(r.activation.get() < 0.05);
         }
@@ -498,7 +545,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let a = |id: u32| {
             results
                 .iter()
@@ -518,12 +565,14 @@ mod tests {
                 target: NodeId::new(1),
                 weight: weight(1.0),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(0),
                 target: NodeId::new(2),
                 weight: weight(1.0),
                 kind: EdgeKind::Conflicts,
+                last_activated: None,
             },
         ];
         let graph = CsrGraph::build(3, edges);
@@ -548,7 +597,7 @@ mod tests {
                 source: None,
             },
         ];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let a = |id: u32| {
             results
                 .iter()
@@ -566,6 +615,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::DirectionalSuppressive,
+            last_activated: None,
         }];
         let graph = CsrGraph::build(3, edges);
         let engine = Engine::new(graph);
@@ -589,7 +639,7 @@ mod tests {
                 source: None,
             },
         ];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let a = |id: u32| {
             results
                 .iter()
@@ -609,12 +659,14 @@ mod tests {
                 target: NodeId::new(2),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(1),
                 target: NodeId::new(2),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
         ];
         let graph = CsrGraph::build(3, edges);
@@ -639,7 +691,7 @@ mod tests {
                 source: None,
             },
         ];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let node2 = results.iter().find(|r| r.node == NodeId::new(2)).unwrap();
         assert!(node2.activation.get() < 0.9);
     }
@@ -654,7 +706,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for i in 1..results.len() {
             assert!(results[i - 1].activation.get() >= results[i].activation.get());
         }
@@ -669,6 +721,7 @@ mod tests {
                 target: NodeId::new(i),
                 weight: weight(1.0),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             })
             .collect();
         let graph = CsrGraph::build(n, edges);
@@ -679,7 +732,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let tied: Vec<&ActivationResult> = results
             .iter()
             .filter(|r| r.node != NodeId::new(0))
@@ -704,7 +757,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let dist = |id: u32| {
             results
                 .iter()
@@ -724,6 +777,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(1.0),
             kind: EdgeKind::DirectionalSuppressive,
+            last_activated: None,
         }];
         let graph = CsrGraph::build(2, edges);
         let engine = Engine::new(graph);
@@ -740,7 +794,7 @@ mod tests {
             activation: act(0.9),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let a0 = results
             .iter()
             .find(|r| r.node == NodeId::new(0))
@@ -771,7 +825,7 @@ mod tests {
             activation: act(0.9),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         let a0 = results
             .iter()
             .find(|r| r.node == NodeId::new(0))
@@ -794,7 +848,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             assert!(r.activation.get() >= 0.5 || r.activation.get() == 0.0);
         }
@@ -808,24 +862,28 @@ mod tests {
                 target: NodeId::new(1),
                 weight: weight(0.8),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(0),
                 target: NodeId::new(2),
                 weight: weight(0.8),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(0),
                 target: NodeId::new(3),
                 weight: weight(0.8),
                 kind: EdgeKind::Conflicts,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(0),
                 target: NodeId::new(4),
                 weight: weight(0.8),
                 kind: EdgeKind::FeatureAffinity,
+                last_activated: None,
             },
         ];
         let graph = CsrGraph::build(5, edges);
@@ -839,7 +897,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         assert!(!results.is_empty());
     }
 
@@ -856,6 +914,7 @@ mod tests {
                         target: NodeId::new(target),
                         weight: weight(0.5),
                         kind: EdgeKind::Positive,
+                        last_activated: None,
                     });
                 }
             }
@@ -873,8 +932,8 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let r1 = engine.activate(&seeds, &config);
-        let r2 = engine.activate(&seeds, &config);
+        let r1 = engine.activate(&seeds, &config).unwrap();
+        let r2 = engine.activate(&seeds, &config).unwrap();
         assert_eq!(r1.len(), r2.len());
         for (a, b) in r1.iter().zip(r2.iter()) {
             assert_eq!(a.node, b.node);
@@ -892,11 +951,11 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
         }
-        let results2 = engine.activate(&seeds, &config);
+        let results2 = engine.activate(&seeds, &config).unwrap();
         assert_eq!(results.len(), results2.len());
         for (a, b) in results.iter().zip(results2.iter()) {
             assert_eq!(a.node, b.node);
@@ -921,7 +980,7 @@ mod tests {
                 source: None,
             },
         ];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             assert!(
                 (0.0..=1.0).contains(&r.activation.get()),
@@ -946,7 +1005,7 @@ mod tests {
             activation: act(1.0),
             source: Some(42),
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             assert_eq!(
                 r.seed_source,
@@ -970,7 +1029,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             assert_eq!(
                 r.seed_source, None,
@@ -995,7 +1054,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let snapshots = engine.activate_with_steps(&seeds, &config).unwrap();
         assert_eq!(snapshots.len(), 3 + 2); // max_steps + 2
     }
 
@@ -1012,7 +1071,7 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let snapshots = engine.activate_with_steps(&seeds, &config).unwrap();
         for snap in &snapshots[..snapshots.len() - 1] {
             assert!(!snap.is_final);
         }
@@ -1039,7 +1098,7 @@ mod tests {
                 source: None,
             },
         ];
-        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let snapshots = engine.activate_with_steps(&seeds, &config).unwrap();
         let step0 = &snapshots[0];
         assert_eq!(step0.step, 0);
         // Step 0 should contain ALL seeded nodes regardless of min_activation
@@ -1061,8 +1120,8 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
-        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
+        let snapshots = engine.activate_with_steps(&seeds, &config).unwrap();
         let final_snap = snapshots.last().unwrap();
         assert!(final_snap.is_final);
         assert_eq!(final_snap.activations.len(), results.len());
@@ -1091,12 +1150,96 @@ mod tests {
             activation: act(1.0),
             source: None,
         }];
-        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let snapshots = engine.activate_with_steps(&seeds, &config).unwrap();
         // Steps 1..max_steps should only include nodes >= min_activation
         for snap in &snapshots[1..snapshots.len() - 1] {
             for &(_, a) in &snap.activations {
                 assert!(a >= 0.5, "Activation {} below min_activation", a);
             }
         }
+    }
+
+    // --- Temporal decay ---
+
+    #[test]
+    fn temporal_weight_no_decay_returns_base() {
+        assert_eq!(temporal_weight(0.8, None, 0.01, 100.0), 0.8);
+    }
+
+    #[test]
+    fn temporal_weight_with_decay_24h() {
+        let result = temporal_weight(1.0, Some(76.0), 0.01, 100.0);
+        // elapsed = 24h, exp(-0.01 * 24) ≈ 0.7866
+        assert!((result - 0.7866).abs() < 1e-3, "Got {result}");
+    }
+
+    #[test]
+    fn temporal_weight_no_last_activated_returns_base() {
+        assert_eq!(temporal_weight(0.5, None, 0.01, 100.0), 0.5);
+    }
+
+    #[test]
+    fn temporal_decay_recent_edge_stronger() {
+        // Two-node graph: 0->1 via recent edge, 0->2 via old edge
+        let edges = vec![
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(1),
+                weight: weight(0.8),
+                kind: EdgeKind::Positive,
+                last_activated: Some(99.0), // recent: 1h ago
+            },
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(2),
+                weight: weight(0.8),
+                kind: EdgeKind::Positive,
+                last_activated: Some(0.0), // old: 100h ago
+            },
+        ];
+        let graph = CsrGraph::build(3, edges);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .min_activation(0.001)
+            .temporal_decay_rate(0.01)
+            .current_time(100.0)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let results = engine.activate(&seeds, &config).unwrap();
+        let a1 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(1))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        assert!(
+            a1 > a2,
+            "Recent edge node ({a1}) should be stronger than old edge node ({a2})"
+        );
+    }
+
+    #[test]
+    fn temporal_decay_validation_error() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .temporal_decay_rate(0.01)
+            // current_time not set -> should error
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        assert!(engine.activate(&seeds, &config).is_err());
     }
 }
