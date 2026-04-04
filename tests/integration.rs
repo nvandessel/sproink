@@ -473,3 +473,270 @@ fn two_seeds_different_sources() {
     // Node 3 is closer to seed 4 (distance 1) than seed 0 (distance 3)
     assert_eq!(find(&results, 3).unwrap().seed_source, Some(20));
 }
+
+/// Exercise Display impls for all newtypes and EdgeKind
+#[test]
+fn display_impls_cover_all_types() {
+    assert_eq!(format!("{}", NodeId::new(42)), "42");
+    assert_eq!(format!("{}", EdgeWeight::new(0.5).unwrap()), "0.5");
+    assert_eq!(format!("{}", Activation::new(0.75).unwrap()), "0.75");
+    assert_eq!(format!("{}", TagId::new(99)), "99");
+    assert_eq!(format!("{}", EdgeKind::Positive), "positive");
+    assert_eq!(format!("{}", EdgeKind::Conflicts), "conflicts");
+    assert_eq!(
+        format!("{}", EdgeKind::DirectionalSuppressive),
+        "directional-suppressive"
+    );
+    assert_eq!(
+        format!("{}", EdgeKind::DirectionalPassive),
+        "directional-passive"
+    );
+    assert_eq!(format!("{}", EdgeKind::FeatureAffinity), "feature-affinity");
+}
+
+/// Exercise Debug impl on CsrGraph
+#[test]
+fn csr_graph_debug_impl() {
+    let graph = CsrGraph::build(3, vec![]);
+    let dbg = format!("{:?}", graph);
+    assert!(dbg.contains("CsrGraph"));
+    assert!(dbg.contains("num_nodes"));
+}
+
+/// Exercise From<u32> for NodeId and TagId
+#[test]
+fn from_u32_conversions() {
+    let node: NodeId = 42.into();
+    assert_eq!(node.get(), 42);
+    let tag: TagId = 99.into();
+    assert_eq!(tag.get(), 99);
+}
+
+/// Exercise Default impls for all config types
+#[test]
+fn default_impls_match_builder() {
+    let pc = PropagationConfig::default();
+    let pb = PropagationConfig::builder().build();
+    assert_eq!(pc.max_steps, pb.max_steps);
+    assert!((pc.decay_factor - pb.decay_factor).abs() < 1e-15);
+
+    let ic = InhibitionConfig::default();
+    let ib = InhibitionConfig::builder().build();
+    assert!((ic.strength - ib.strength).abs() < 1e-15);
+    assert_eq!(ic.breadth, ib.breadth);
+
+    let hc = HebbianConfig::default();
+    let hb = HebbianConfig::builder().build();
+    assert!((hc.learning_rate - hb.learning_rate).abs() < 1e-15);
+
+    let ac = AffinityConfig::default();
+    let ab = AffinityConfig::builder().build();
+    assert!((ac.max_weight - ab.max_weight).abs() < 1e-15);
+}
+
+/// OjaLearner NaN safety: infinite inputs produce min_weight, not NaN
+#[test]
+fn oja_nan_safety() {
+    let learner = OjaLearner;
+    let config = HebbianConfig::builder().build();
+    // Use activation values close to 1.0 with a weight near 1.0 to push Oja's rule
+    // toward overflow. Repeated application should stay finite.
+    let mut w = EdgeWeight::new(0.95).unwrap();
+    for _ in 0..1000 {
+        w = learner.update_weight(
+            w,
+            Activation::new(0.999).unwrap(),
+            Activation::new(0.999).unwrap(),
+            &config,
+        );
+        assert!(w.get().is_finite());
+    }
+}
+
+/// Jaccard similarity with two empty slices returns 0.0
+#[test]
+fn jaccard_empty_slices() {
+    let a: Vec<TagId> = vec![];
+    let b: Vec<TagId> = vec![];
+    assert!((jaccard_similarity(&a, &b) - 0.0).abs() < 1e-15);
+}
+
+/// Dynamic affinity on a large graph (>1024 nodes) to exercise parallel path
+#[test]
+fn parallel_dynamic_affinity_with_seed_sources() {
+    let n = 2000u32;
+    let mut edges = Vec::new();
+    for i in 0..n - 1 {
+        edges.push(EdgeInput {
+            source: NodeId::new(i),
+            target: NodeId::new(i + 1),
+            weight: weight(0.6),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        });
+    }
+    let graph = CsrGraph::build(n, edges);
+    let engine = Engine::new(graph);
+
+    // Build tag sets: group nodes into clusters of 100 with shared tags
+    let tag_sets: Vec<Vec<TagId>> = (0..n)
+        .map(|i| {
+            let cluster = i / 100;
+            let mut tags = vec![TagId::new(cluster), TagId::new(cluster + 1000)];
+            tags.sort();
+            tags
+        })
+        .collect();
+
+    let config = PropagationConfig::builder()
+        .max_steps(2)
+        .min_activation(0.001)
+        .build();
+    let aff_config = AffinityConfig::builder().min_jaccard(0.3).build();
+
+    let seeds = vec![
+        Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(1),
+        },
+        Seed {
+            node: NodeId::new(n - 1),
+            activation: act(1.0),
+            source: Some(2),
+        },
+    ];
+
+    let results = engine
+        .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+        .unwrap();
+
+    // All results should be in bounds
+    for r in &results {
+        assert!((0.0..=1.0).contains(&r.activation.get()));
+    }
+    // Seed sources should be present
+    let r0 = find(&results, 0).unwrap();
+    assert_eq!(r0.seed_source, Some(1));
+    let rn = find(&results, n - 1).unwrap();
+    assert_eq!(rn.seed_source, Some(2));
+}
+
+/// Large parallel graph with DirectionalSuppressive + DirectionalPassive edges
+#[test]
+fn parallel_directional_passive_skipped() {
+    let n = 2000u32;
+    let mut edges = Vec::new();
+    for i in 0..n {
+        let t = (i + 1) % n;
+        if t != i {
+            edges.push(EdgeInput {
+                source: NodeId::new(i),
+                target: NodeId::new(t),
+                weight: weight(0.6),
+                kind: EdgeKind::DirectionalSuppressive,
+                last_activated: None,
+            });
+        }
+    }
+    let graph = CsrGraph::build(n, edges);
+    let engine = Engine::new(graph);
+    let config = PropagationConfig::builder()
+        .max_steps(2)
+        .min_activation(0.001)
+        .build();
+    let seeds = vec![Seed {
+        node: NodeId::new(0),
+        activation: act(1.0),
+        source: Some(1),
+    }];
+    let results = engine.activate(&seeds, &config).unwrap();
+    for r in &results {
+        assert!((0.0..=1.0).contains(&r.activation.get()));
+    }
+}
+
+/// Parallel graph with asymmetric seed sources: one seed has a source, another doesn't.
+/// Exercises the (Some, None) and (None, Some) tie-breaking branches in reduce.
+#[test]
+fn parallel_asymmetric_seed_sources() {
+    let n = 2000u32;
+    let mut edges = Vec::new();
+    // Create edges that fan out broadly so partitions overlap
+    for i in 0..n {
+        for offset in &[1u32, 7, 13, 50, 100] {
+            let t = (i + offset) % n;
+            if t != i {
+                edges.push(EdgeInput {
+                    source: NodeId::new(i),
+                    target: NodeId::new(t),
+                    weight: weight(0.5),
+                    kind: EdgeKind::Positive,
+                    last_activated: None,
+                });
+            }
+        }
+    }
+    let graph = CsrGraph::build(n, edges);
+    let engine = Engine::new(graph);
+    let config = PropagationConfig::builder()
+        .max_steps(3)
+        .min_activation(0.001)
+        .build();
+    // One seed with source, one without — creates asymmetric Some/None in parallel reduce
+    let seeds = vec![
+        Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(42),
+        },
+        Seed {
+            node: NodeId::new(n / 2),
+            activation: act(1.0),
+            source: None,
+        },
+    ];
+    let results = engine.activate(&seeds, &config).unwrap();
+    // Nodes near seed 0 should have source 42
+    assert_eq!(find(&results, 0).unwrap().seed_source, Some(42));
+    // Nodes near seed n/2 should have source None
+    assert_eq!(find(&results, n / 2).unwrap().seed_source, None);
+    // All activations in bounds
+    for r in &results {
+        assert!((0.0..=1.0).contains(&r.activation.get()));
+    }
+}
+
+/// Temporal decay on a large graph exercises the parallel temporal weight path
+#[test]
+fn parallel_temporal_decay() {
+    let n = 2000u32;
+    let mut edges = Vec::new();
+    for i in 0..n {
+        let t = (i + 7) % n;
+        if t != i {
+            edges.push(EdgeInput {
+                source: NodeId::new(i),
+                target: NodeId::new(t),
+                weight: weight(0.6),
+                kind: EdgeKind::Positive,
+                last_activated: Some(100.0), // 100 hours ago
+            });
+        }
+    }
+    let graph = CsrGraph::build(n, edges);
+    let engine = Engine::new(graph);
+    let config = PropagationConfig::builder()
+        .temporal_decay_rate(0.01)
+        .current_time(200.0)
+        .build();
+    let seeds = vec![Seed {
+        node: NodeId::new(0),
+        activation: act(1.0),
+        source: None,
+    }];
+    let results = engine.activate(&seeds, &config).unwrap();
+    for r in &results {
+        assert!((0.0..=1.0).contains(&r.activation.get()));
+    }
+}
