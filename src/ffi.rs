@@ -114,6 +114,7 @@ pub unsafe extern "C" fn sproink_activate(
                 .map(|(&node, &act)| Seed {
                     node: NodeId::new(node),
                     activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
+                    source: None,
                 })
                 .collect()
         } else {

@@ -75,18 +75,26 @@ impl<G: Graph> Engine<G> {
         let mut current = vec![0.0f64; n];
         let mut next = vec![0.0f64; n];
         let mut distance = vec![u32::MAX; n];
+        let mut seed_sources: Vec<Option<u32>> = vec![None; n];
 
         for seed in seeds {
             let idx = seed.node.index();
             if idx < n {
                 current[idx] = seed.activation.get();
                 distance[idx] = 0;
+                seed_sources[idx] = seed.source;
             }
         }
 
         for _step in 0..config.max_steps {
             next.copy_from_slice(&current);
-            self.propagate_step(&current, &mut next, &mut distance, config);
+            self.propagate_step(
+                &current,
+                &mut next,
+                &mut distance,
+                &mut seed_sources,
+                config,
+            );
             std::mem::swap(&mut current, &mut next);
         }
 
@@ -110,6 +118,7 @@ impl<G: Graph> Engine<G> {
                 node: NodeId::new(i as u32),
                 activation: Activation::new_unchecked(a),
                 distance: distance[i],
+                seed_source: seed_sources[i],
             })
             .collect();
 
@@ -129,12 +138,13 @@ impl<G: Graph> Engine<G> {
         current: &[f64],
         new: &mut [f64],
         distances: &mut [u32],
+        seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
     ) {
         if self.graph.num_nodes() < PARALLEL_THRESHOLD {
-            self.propagate_step_sequential(current, new, distances, config);
+            self.propagate_step_sequential(current, new, distances, seed_sources, config);
         } else {
-            self.propagate_step_parallel(current, new, distances, config);
+            self.propagate_step_parallel(current, new, distances, seed_sources, config);
         }
     }
 
@@ -143,6 +153,7 @@ impl<G: Graph> Engine<G> {
         current: &[f64],
         new: &mut [f64],
         distances: &mut [u32],
+        seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
     ) {
         let n = self.graph.num_nodes() as usize;
@@ -184,6 +195,7 @@ impl<G: Graph> Engine<G> {
                     let candidate = distances[i] + 1;
                     if candidate < distances[j] {
                         distances[j] = candidate;
+                        seed_sources[j] = seed_sources[i];
                     }
                 }
             }
@@ -195,6 +207,7 @@ impl<G: Graph> Engine<G> {
         current: &[f64],
         new: &mut [f64],
         distances: &mut [u32],
+        seed_sources: &mut [Option<u32>],
         config: &PropagationConfig,
     ) {
         let n = self.graph.num_nodes() as usize;
@@ -203,6 +216,7 @@ impl<G: Graph> Engine<G> {
             positive_max: Vec<f64>,
             suppress_delta: Vec<f64>,
             min_distance: Vec<u32>,
+            seed_source: Vec<Option<u32>>,
         }
 
         let merged = (0..n)
@@ -213,6 +227,7 @@ impl<G: Graph> Engine<G> {
                     positive_max: vec![0.0f64; n],
                     suppress_delta: vec![0.0f64; n],
                     min_distance: vec![u32::MAX; n],
+                    seed_source: vec![None; n],
                 },
                 |mut local, i| {
                     let neighbors = self.graph.neighbors(NodeId::new(i as u32));
@@ -249,6 +264,7 @@ impl<G: Graph> Engine<G> {
                             let candidate = distances[i] + 1;
                             if candidate < local.min_distance[j] {
                                 local.min_distance[j] = candidate;
+                                local.seed_source[j] = seed_sources[i];
                             }
                         }
                     }
@@ -261,12 +277,24 @@ impl<G: Graph> Engine<G> {
                     positive_max: vec![0.0f64; n],
                     suppress_delta: vec![0.0f64; n],
                     min_distance: vec![u32::MAX; n],
+                    seed_source: vec![None; n],
                 },
                 |mut a, b| {
                     for j in 0..n {
                         a.positive_max[j] = a.positive_max[j].max(b.positive_max[j]);
                         a.suppress_delta[j] += b.suppress_delta[j];
-                        a.min_distance[j] = a.min_distance[j].min(b.min_distance[j]);
+                        if b.min_distance[j] < a.min_distance[j] {
+                            a.min_distance[j] = b.min_distance[j];
+                            a.seed_source[j] = b.seed_source[j];
+                        } else if b.min_distance[j] == a.min_distance[j] {
+                            // Tie-breaking: lower seed source ID wins (None > Some)
+                            a.seed_source[j] = match (a.seed_source[j], b.seed_source[j]) {
+                                (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
+                                (Some(_), None) => a.seed_source[j],
+                                (None, Some(_)) => b.seed_source[j],
+                                (None, None) => None,
+                            };
+                        }
                     }
                     a
                 },
@@ -275,7 +303,17 @@ impl<G: Graph> Engine<G> {
         for j in 0..n {
             new[j] = new[j].max(merged.positive_max[j]);
             new[j] = (new[j] - merged.suppress_delta[j]).max(0.0);
-            distances[j] = distances[j].min(merged.min_distance[j]);
+            if merged.min_distance[j] < distances[j] {
+                distances[j] = merged.min_distance[j];
+                seed_sources[j] = merged.seed_source[j];
+            } else if merged.min_distance[j] == distances[j] && distances[j] != u32::MAX {
+                seed_sources[j] = match (seed_sources[j], merged.seed_source[j]) {
+                    (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
+                    (Some(_), None) => seed_sources[j],
+                    (None, Some(_)) => merged.seed_source[j],
+                    (None, None) => None,
+                };
+            }
         }
     }
 }
@@ -320,6 +358,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         assert!(results.iter().any(|r| r.node == NodeId::new(0)));
@@ -352,6 +391,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         let a = |id: u32| {
@@ -395,10 +435,12 @@ mod tests {
             Seed {
                 node: NodeId::new(0),
                 activation: act(0.8),
+                source: None,
             },
             Seed {
                 node: NodeId::new(2),
                 activation: act(0.8),
+                source: None,
             },
         ];
         let results = engine.activate(&seeds, &config);
@@ -434,10 +476,12 @@ mod tests {
             Seed {
                 node: NodeId::new(0),
                 activation: act(0.8),
+                source: None,
             },
             Seed {
                 node: NodeId::new(1),
                 activation: act(0.8),
+                source: None,
             },
         ];
         let results = engine.activate(&seeds, &config);
@@ -482,10 +526,12 @@ mod tests {
             Seed {
                 node: NodeId::new(0),
                 activation: act(0.8),
+                source: None,
             },
             Seed {
                 node: NodeId::new(1),
                 activation: act(0.8),
+                source: None,
             },
         ];
         let results = engine.activate(&seeds, &config);
@@ -501,6 +547,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         for i in 1..results.len() {
@@ -525,6 +572,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         let tied: Vec<&ActivationResult> = results
@@ -549,6 +597,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         let dist = |id: u32| {
@@ -584,6 +633,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(1),
             activation: act(0.9),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         let a0 = results
@@ -614,6 +664,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(0.9),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         let a0 = results
@@ -636,6 +687,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         for r in &results {
@@ -680,6 +732,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         assert!(!results.is_empty());
@@ -713,6 +766,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let r1 = engine.activate(&seeds, &config);
         let r2 = engine.activate(&seeds, &config);
@@ -731,6 +785,7 @@ mod tests {
         let seeds = vec![Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         }];
         let results = engine.activate(&seeds, &config);
         for r in &results {
@@ -753,10 +808,12 @@ mod tests {
             Seed {
                 node: NodeId::new(0),
                 activation: act(1.0),
+                source: None,
             },
             Seed {
                 node: NodeId::new(500),
                 activation: act(0.8),
+                source: None,
             },
         ];
         let results = engine.activate(&seeds, &config);
@@ -765,6 +822,55 @@ mod tests {
                 (0.0..=1.0).contains(&r.activation.get()),
                 "Activation {} out of bounds",
                 r.activation.get()
+            );
+        }
+    }
+
+    // --- Seed source tracking ---
+
+    #[test]
+    fn single_seed_source_propagates_to_all() {
+        let graph = build_chain(4, 1.0);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(42),
+        }];
+        let results = engine.activate(&seeds, &config);
+        for r in &results {
+            assert_eq!(
+                r.seed_source,
+                Some(42),
+                "Node {:?} should have seed_source 42",
+                r.node
+            );
+        }
+    }
+
+    #[test]
+    fn no_seed_source_means_none() {
+        let graph = build_chain(4, 1.0);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let results = engine.activate(&seeds, &config);
+        for r in &results {
+            assert_eq!(
+                r.seed_source, None,
+                "Node {:?} should have seed_source None",
+                r.node
             );
         }
     }

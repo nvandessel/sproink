@@ -36,6 +36,7 @@ fn three_node_chain_propagation() {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
     let results = engine.activate(&seeds, &config);
 
@@ -91,14 +92,17 @@ fn conflict_triangle() {
         Seed {
             node: NodeId::new(0),
             activation: act(1.0),
+            source: None,
         },
         Seed {
             node: NodeId::new(1),
             activation: act(1.0),
+            source: None,
         },
         Seed {
             node: NodeId::new(2),
             activation: act(1.0),
+            source: None,
         },
     ];
     let results = engine.activate(&seeds, &config);
@@ -134,10 +138,12 @@ fn directional_override() {
         Seed {
             node: NodeId::new(0),
             activation: act(0.9),
+            source: None,
         },
         Seed {
             node: NodeId::new(1),
             activation: act(0.9),
+            source: None,
         },
     ];
     let results = engine.activate(&seeds, &config);
@@ -178,6 +184,7 @@ fn affinity_integration() {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
     let results = engine.activate(&seeds, &config);
 
@@ -213,6 +220,7 @@ fn inhibition_plus_sigmoid() {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
     let results = engine.activate(&seeds, &config);
 
@@ -252,6 +260,7 @@ fn hebbian_round_trip() {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
     let results = engine.activate(&seeds, &config);
 
@@ -298,6 +307,7 @@ fn parallel_produces_valid_results() {
     let seeds = vec![Seed {
         node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
 
     let r1 = engine.activate(&seeds, &config);
@@ -326,10 +336,11 @@ fn parallel_path_mixed_edge_kinds() {
         let t1 = (i + 7) % n;
         if t1 != i {
             edges.push(EdgeInput {
-                source: NodeId(i),
-                target: NodeId(t1),
+                source: NodeId::new(i),
+                target: NodeId::new(t1),
                 weight: weight(0.6),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             });
         }
         // Conflict edges (every 10th node)
@@ -337,10 +348,11 @@ fn parallel_path_mixed_edge_kinds() {
             let t2 = (i + 3) % n;
             if t2 != i {
                 edges.push(EdgeInput {
-                    source: NodeId(i),
-                    target: NodeId(t2),
+                    source: NodeId::new(i),
+                    target: NodeId::new(t2),
                     weight: weight(0.5),
                     kind: EdgeKind::Conflicts,
+                    last_activated: None,
                 });
             }
         }
@@ -349,10 +361,11 @@ fn parallel_path_mixed_edge_kinds() {
             let t3 = (i + 11) % n;
             if t3 != i {
                 edges.push(EdgeInput {
-                    source: NodeId(i),
-                    target: NodeId(t3),
+                    source: NodeId::new(i),
+                    target: NodeId::new(t3),
                     weight: weight(0.4),
                     kind: EdgeKind::DirectionalSuppressive,
+                    last_activated: None,
                 });
             }
         }
@@ -361,10 +374,11 @@ fn parallel_path_mixed_edge_kinds() {
             let t4 = (i + 5) % n;
             if t4 != i {
                 edges.push(EdgeInput {
-                    source: NodeId(i),
-                    target: NodeId(t4),
+                    source: NodeId::new(i),
+                    target: NodeId::new(t4),
                     weight: weight(0.3),
                     kind: EdgeKind::FeatureAffinity,
+                    last_activated: None,
                 });
             }
         }
@@ -373,11 +387,77 @@ fn parallel_path_mixed_edge_kinds() {
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder().build();
     let seeds = vec![Seed {
-        node: NodeId(0),
+        node: NodeId::new(0),
         activation: act(1.0),
+        source: None,
     }];
-    let results = engine.activate(&seeds, &config);
+    let results = engine.activate(&seeds, &config).unwrap();
     for r in &results {
-        assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0);
+        assert!((0.0..=1.0).contains(&r.activation.get()));
     }
+}
+
+/// Two seeds at opposite ends of a chain, each with a different source ID.
+/// Nodes closer to each seed should inherit that seed's source.
+#[test]
+fn two_seeds_different_sources() {
+    // Chain: 0 -- 1 -- 2 -- 3 -- 4
+    let edges = vec![
+        EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+        EdgeInput {
+            source: NodeId::new(1),
+            target: NodeId::new(2),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+        EdgeInput {
+            source: NodeId::new(2),
+            target: NodeId::new(3),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+        EdgeInput {
+            source: NodeId::new(3),
+            target: NodeId::new(4),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+    ];
+    let graph = CsrGraph::build(5, edges);
+    let engine = Engine::new(graph);
+    let config = PropagationConfig::builder()
+        .max_steps(4)
+        .min_activation(0.001)
+        .build();
+    let seeds = vec![
+        Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(10),
+        },
+        Seed {
+            node: NodeId::new(4),
+            activation: act(1.0),
+            source: Some(20),
+        },
+    ];
+    let results = engine.activate(&seeds, &config).unwrap();
+
+    // Node 0 is seed 10
+    assert_eq!(find(&results, 0).unwrap().seed_source, Some(10));
+    // Node 4 is seed 20
+    assert_eq!(find(&results, 4).unwrap().seed_source, Some(20));
+    // Node 1 is closer to seed 0 (distance 1) than seed 4 (distance 3)
+    assert_eq!(find(&results, 1).unwrap().seed_source, Some(10));
+    // Node 3 is closer to seed 4 (distance 1) than seed 0 (distance 3)
+    assert_eq!(find(&results, 3).unwrap().seed_source, Some(20));
 }
