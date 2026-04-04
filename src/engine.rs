@@ -58,6 +58,13 @@ impl Default for PropagationConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct StepSnapshot {
+    pub step: u32,
+    pub activations: Vec<(NodeId, f64)>,
+    pub is_final: bool,
+}
+
 pub struct Engine<G: Graph> {
     graph: G,
 }
@@ -131,6 +138,104 @@ impl<G: Graph> Engine<G> {
         });
 
         results
+    }
+
+    #[must_use]
+    pub fn activate_with_steps(
+        &self,
+        seeds: &[Seed],
+        config: &PropagationConfig,
+    ) -> Vec<StepSnapshot> {
+        let n = self.graph.num_nodes() as usize;
+        let mut snapshots = Vec::with_capacity(config.max_steps as usize + 2);
+
+        let mut current = vec![0.0f64; n];
+        let mut next = vec![0.0f64; n];
+        let mut distances = vec![u32::MAX; n];
+        let mut seed_sources: Vec<Option<u32>> = vec![None; n];
+
+        for seed in seeds {
+            let idx = seed.node.index();
+            if idx < n {
+                current[idx] = seed.activation.get();
+                distances[idx] = 0;
+                seed_sources[idx] = seed.source;
+            }
+        }
+
+        // Step 0: snapshot seed state (ALL seeded nodes regardless of min_activation)
+        let mut step0: Vec<(NodeId, f64)> = current
+            .iter()
+            .enumerate()
+            .filter(|&(_, &a)| a > 0.0)
+            .map(|(i, &a)| (NodeId::new(i as u32), a))
+            .collect();
+        Self::sort_snapshot(&mut step0);
+        snapshots.push(StepSnapshot {
+            step: 0,
+            activations: step0,
+            is_final: false,
+        });
+
+        // Steps 1..max_steps
+        for step in 0..config.max_steps {
+            next.copy_from_slice(&current);
+            self.propagate_step(
+                &current,
+                &mut next,
+                &mut distances,
+                &mut seed_sources,
+                config,
+            );
+            std::mem::swap(&mut current, &mut next);
+
+            let mut snap: Vec<(NodeId, f64)> = current
+                .iter()
+                .enumerate()
+                .filter(|&(_, &a)| a >= config.min_activation)
+                .map(|(i, &a)| (NodeId::new(i as u32), a))
+                .collect();
+            Self::sort_snapshot(&mut snap);
+            snapshots.push(StepSnapshot {
+                step: step + 1,
+                activations: snap,
+                is_final: false,
+            });
+        }
+
+        // Final: post-process (inhibition + sigmoid + prune)
+        if let Some(ref inh_config) = config.inhibition {
+            TopMInhibitor.inhibit(&mut current, inh_config);
+        }
+        squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
+        for v in current.iter_mut() {
+            if *v < config.min_activation {
+                *v = 0.0;
+            }
+        }
+
+        let mut final_snap: Vec<(NodeId, f64)> = current
+            .iter()
+            .enumerate()
+            .filter(|&(_, &a)| a > 0.0)
+            .map(|(i, &a)| (NodeId::new(i as u32), a))
+            .collect();
+        Self::sort_snapshot(&mut final_snap);
+        snapshots.push(StepSnapshot {
+            step: config.max_steps + 1,
+            activations: final_snap,
+            is_final: true,
+        });
+
+        snapshots
+    }
+
+    fn sort_snapshot(snap: &mut [(NodeId, f64)]) {
+        snap.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
     }
 
     fn propagate_step(
@@ -872,6 +977,126 @@ mod tests {
                 "Node {:?} should have seed_source None",
                 r.node
             );
+        }
+    }
+
+    // --- Step snapshots ---
+
+    #[test]
+    fn step_snapshot_count() {
+        let graph = build_chain(4, 1.0);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let snapshots = engine.activate_with_steps(&seeds, &config);
+        assert_eq!(snapshots.len(), 3 + 2); // max_steps + 2
+    }
+
+    #[test]
+    fn step_snapshot_final_flag() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(2)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let snapshots = engine.activate_with_steps(&seeds, &config);
+        for snap in &snapshots[..snapshots.len() - 1] {
+            assert!(!snap.is_final);
+        }
+        assert!(snapshots.last().unwrap().is_final);
+    }
+
+    #[test]
+    fn step_snapshot_step0_contains_seeds() {
+        let graph = build_chain(5, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(2)
+            .min_activation(0.5)
+            .build();
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.3),
+                source: None,
+            },
+            Seed {
+                node: NodeId::new(1),
+                activation: act(0.9),
+                source: None,
+            },
+        ];
+        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let step0 = &snapshots[0];
+        assert_eq!(step0.step, 0);
+        // Step 0 should contain ALL seeded nodes regardless of min_activation
+        let step0_nodes: Vec<u32> = step0.activations.iter().map(|(n, _)| n.get()).collect();
+        assert!(step0_nodes.contains(&0));
+        assert!(step0_nodes.contains(&1));
+    }
+
+    #[test]
+    fn step_snapshot_final_matches_activate() {
+        let graph = build_chain(4, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let results = engine.activate(&seeds, &config);
+        let snapshots = engine.activate_with_steps(&seeds, &config);
+        let final_snap = snapshots.last().unwrap();
+        assert!(final_snap.is_final);
+        assert_eq!(final_snap.activations.len(), results.len());
+        for (i, (node, act_val)) in final_snap.activations.iter().enumerate() {
+            assert_eq!(*node, results[i].node);
+            assert!(
+                (act_val - results[i].activation.get()).abs() < 1e-15,
+                "Mismatch at {}: {} vs {}",
+                i,
+                act_val,
+                results[i].activation.get()
+            );
+        }
+    }
+
+    #[test]
+    fn step_snapshot_filters_by_min_activation() {
+        let graph = build_chain(5, 0.1);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(2)
+            .min_activation(0.5)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let snapshots = engine.activate_with_steps(&seeds, &config);
+        // Steps 1..max_steps should only include nodes >= min_activation
+        for snap in &snapshots[1..snapshots.len() - 1] {
+            for &(_, a) in &snap.activations {
+                assert!(a >= 0.5, "Activation {} below min_activation", a);
+            }
         }
     }
 }
