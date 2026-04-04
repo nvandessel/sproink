@@ -1,12 +1,20 @@
+//! Tag-based affinity edge generation using Jaccard similarity.
+//!
+//! Given per-node tag sets, generates [`FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+//! edges between nodes whose tags overlap above a configurable threshold.
+
 use typed_builder::TypedBuilder;
 
 use crate::graph::{EdgeInput, EdgeKind};
 use crate::types::{EdgeWeight, NodeId, TagId};
 
+/// Configuration for affinity edge generation.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct AffinityConfig {
+    /// Maximum edge weight assigned to a perfect Jaccard match. Default: `0.4`.
     #[builder(default = 0.4)]
     pub max_weight: f64,
+    /// Minimum Jaccard similarity to create an edge. Default: `0.3`.
     #[builder(default = 0.3)]
     pub min_jaccard: f64,
 }
@@ -17,13 +25,18 @@ impl Default for AffinityConfig {
     }
 }
 
+/// Trait for generating affinity edges from node tag sets.
 pub trait AffinityGenerator: Send + Sync {
+    /// Generates affinity edges for all node pairs exceeding the similarity threshold.
     fn generate(&self, node_tags: &[Vec<TagId>], config: &AffinityConfig) -> Vec<EdgeInput>;
 }
 
+/// Jaccard-based affinity generator using two-pointer merge on sorted tag slices.
 pub struct JaccardAffinity;
 
-/// Two-pointer merge Jaccard on pre-sorted tag slices.
+/// Computes Jaccard similarity between two sorted tag slices.
+///
+/// Returns `0.0` if either slice is empty.
 #[must_use]
 pub fn jaccard_similarity(a: &[TagId], b: &[TagId]) -> f64 {
     if a.is_empty() || b.is_empty() {

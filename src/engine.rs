@@ -1,3 +1,9 @@
+//! Core propagation engine and configuration.
+//!
+//! The [`Engine`] drives multi-step spreading activation over any [`Graph`]
+//! implementation, with optional lateral inhibition, sigmoid squashing,
+//! temporal decay, and dynamic affinity.
+
 use rayon::prelude::*;
 use typed_builder::TypedBuilder;
 
@@ -46,24 +52,49 @@ fn temporal_weight(base_weight: f64, last_activated: Option<f64>, rho: f64, t_no
     }
 }
 
+/// Configuration for a spreading activation run.
+///
+/// Use the builder (via [`PropagationConfig::builder()`]) or [`Default::default()`]
+/// for sensible defaults.
+///
+/// # Examples
+///
+/// ```
+/// use sproink::PropagationConfig;
+///
+/// let config = PropagationConfig::builder()
+///     .max_steps(5)
+///     .decay_factor(0.6)
+///     .build();
+/// assert_eq!(config.max_steps, 5);
+/// ```
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct PropagationConfig {
+    /// Number of propagation steps. Default: `3`.
     #[builder(default = 3)]
     pub max_steps: u32,
+    /// Per-step multiplicative decay applied to energy. Range: `(0.0, 1.0]`. Default: `0.7`.
     #[builder(default = 0.7)]
     pub decay_factor: f64,
+    /// Fraction of a node's energy that spreads to neighbors. Range: `(0.0, 1.0]`. Default: `0.85`.
     #[builder(default = 0.85)]
     pub spread_factor: f64,
+    /// Activations below this threshold are zeroed out. Default: `0.01`.
     #[builder(default = 0.01)]
     pub min_activation: f64,
+    /// Steepness of the post-propagation sigmoid squash. Default: `10.0`.
     #[builder(default = 10.0)]
     pub sigmoid_gain: f64,
+    /// Midpoint of the sigmoid squash function. Default: `0.3`.
     #[builder(default = 0.3)]
     pub sigmoid_center: f64,
+    /// Optional lateral inhibition config. `None` disables inhibition.
     #[builder(default, setter(strip_option))]
     pub inhibition: Option<InhibitionConfig>,
+    /// Optional temporal decay rate (ρ). Requires `current_time` to be set.
     #[builder(default, setter(strip_option))]
     pub temporal_decay_rate: Option<f64>,
+    /// Current timestamp for temporal decay. Required when `temporal_decay_rate` is set.
     #[builder(default, setter(strip_option))]
     pub current_time: Option<f64>,
 }
@@ -74,23 +105,62 @@ impl Default for PropagationConfig {
     }
 }
 
+/// Snapshot of node activations at a single propagation step.
+///
+/// Returned by [`Engine::activate_with_steps()`]. The final snapshot
+/// (after inhibition and squashing) has `is_final == true`.
 #[derive(Debug, Clone)]
 pub struct StepSnapshot {
+    /// The step number (0 = initial seed state).
     pub step: u32,
+    /// Active nodes and their activation values, sorted by activation descending.
     pub activations: Vec<(NodeId, f64)>,
+    /// `true` for the final post-processed snapshot.
     pub is_final: bool,
 }
 
+/// The spreading activation engine.
+///
+/// Generic over any [`Graph`] implementation. Typical usage is with
+/// `Engine<&CsrGraph>` (borrowing the graph).
 pub struct Engine<G: Graph> {
     graph: G,
 }
 
 impl<G: Graph> Engine<G> {
+    /// Creates a new engine wrapping the given graph.
     #[must_use]
     pub fn new(graph: G) -> Self {
         Engine { graph }
     }
 
+    /// Runs spreading activation and returns the final results.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sproink::{
+    ///     Activation, CsrGraph, EdgeInput, EdgeKind, EdgeWeight,
+    ///     Engine, NodeId, PropagationConfig, Seed,
+    /// };
+    ///
+    /// let graph = CsrGraph::build(2, vec![EdgeInput {
+    ///     source: NodeId::new(0),
+    ///     target: NodeId::new(1),
+    ///     weight: EdgeWeight::new(0.8).unwrap(),
+    ///     kind: EdgeKind::Positive,
+    ///     last_activated: None,
+    /// }]);
+    ///
+    /// let engine = Engine::new(&graph);
+    /// let seeds = vec![Seed {
+    ///     node: NodeId::new(0),
+    ///     activation: Activation::new(1.0).unwrap(),
+    ///     source: None,
+    /// }];
+    /// let results = engine.activate(&seeds, &PropagationConfig::default()).unwrap();
+    /// assert!(!results.is_empty());
+    /// ```
     pub fn activate(
         &self,
         seeds: &[Seed],
@@ -100,6 +170,9 @@ impl<G: Graph> Engine<G> {
         Ok(results)
     }
 
+    /// Runs spreading activation and returns per-step snapshots.
+    ///
+    /// Includes step 0 (seed state) through the final post-processed snapshot.
     pub fn activate_with_steps(
         &self,
         seeds: &[Seed],
@@ -109,6 +182,9 @@ impl<G: Graph> Engine<G> {
         Ok(snapshots.unwrap())
     }
 
+    /// Runs spreading activation with dynamic tag-based affinity edges.
+    ///
+    /// `tag_sets` must have exactly `graph.num_nodes()` entries.
     pub fn activate_with_affinity(
         &self,
         seeds: &[Seed],
@@ -121,6 +197,10 @@ impl<G: Graph> Engine<G> {
         Ok(results)
     }
 
+    /// Runs spreading activation with dynamic affinity and per-step snapshots.
+    ///
+    /// Combines the behavior of [`activate_with_steps()`](Engine::activate_with_steps)
+    /// and [`activate_with_affinity()`](Engine::activate_with_affinity).
     pub fn activate_with_steps_and_affinity(
         &self,
         seeds: &[Seed],

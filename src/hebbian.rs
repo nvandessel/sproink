@@ -1,16 +1,27 @@
+//! Hebbian/Oja learning rule for weight updates.
+//!
+//! After propagation, co-activated node pairs can have their edge weights
+//! updated using Oja's rule, which combines Hebbian strengthening with
+//! a normalization term for stability.
+
 use std::collections::HashSet;
 use typed_builder::TypedBuilder;
 
 use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId};
 
+/// Configuration for Hebbian/Oja learning.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HebbianConfig {
+    /// Learning rate (η). Default: `0.05`.
     #[builder(default = 0.05)]
     pub learning_rate: f64,
+    /// Minimum allowed edge weight after update. Default: `0.01`.
     #[builder(default = 0.01)]
     pub min_weight: f64,
+    /// Maximum allowed edge weight after update. Default: `0.95`.
     #[builder(default = 0.95)]
     pub max_weight: f64,
+    /// Minimum activation to be considered co-active. Default: `0.15`.
     #[builder(default = 0.15)]
     pub activation_threshold: f64,
 }
@@ -21,15 +32,24 @@ impl Default for HebbianConfig {
     }
 }
 
+/// A pair of co-activated nodes extracted after propagation.
+///
+/// Pairs are canonically ordered: `node_a < node_b`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoActivationPair {
+    /// The lower-ID node.
     pub node_a: NodeId,
+    /// The higher-ID node.
     pub node_b: NodeId,
+    /// Activation of `node_a`.
     pub activation_a: Activation,
+    /// Activation of `node_b`.
     pub activation_b: Activation,
 }
 
+/// Trait for Hebbian weight-update strategies.
 pub trait Learner: Send + Sync {
+    /// Computes a new edge weight given the current weight and both endpoint activations.
     fn update_weight(
         &self,
         current_weight: EdgeWeight,
@@ -39,6 +59,7 @@ pub trait Learner: Send + Sync {
     ) -> EdgeWeight;
 }
 
+/// Oja's rule learner: `ΔW = η · (a_i · a_j − a_j² · W)`.
 pub struct OjaLearner;
 
 impl Learner for OjaLearner {
@@ -68,6 +89,10 @@ impl Learner for OjaLearner {
     }
 }
 
+/// Extracts co-activation pairs from propagation results.
+///
+/// Filters to nodes above `config.activation_threshold`, then returns all
+/// pairs excluding seed-seed combinations. Pairs are canonically ordered.
 #[must_use]
 pub fn extract_co_activation_pairs(
     results: &[ActivationResult],
