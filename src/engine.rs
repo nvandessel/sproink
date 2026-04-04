@@ -181,6 +181,10 @@ impl<G: Graph> Engine<G> {
         config: &PropagationConfig,
     ) -> Result<Vec<StepSnapshot>, SproinkError> {
         let (_, snapshots) = self.activate_inner(seeds, config, None, true)?;
+        debug_assert!(
+            snapshots.is_some(),
+            "collect_steps=true must produce snapshots"
+        );
         Ok(snapshots.unwrap())
     }
 
@@ -212,6 +216,10 @@ impl<G: Graph> Engine<G> {
     ) -> Result<Vec<StepSnapshot>, SproinkError> {
         let (_, snapshots) =
             self.activate_inner(seeds, config, Some((tag_sets, affinity_config)), true)?;
+        debug_assert!(
+            snapshots.is_some(),
+            "collect_steps=true must produce snapshots"
+        );
         Ok(snapshots.unwrap())
     }
 
@@ -345,11 +353,19 @@ impl<G: Graph> Engine<G> {
     }
 
     fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
-        if config.temporal_decay_rate.is_some() && config.current_time.is_none() {
-            return Err(SproinkError::InvalidValue {
-                field: "current_time",
-                value: 0.0,
-            });
+        if let Some(rho) = config.temporal_decay_rate {
+            if !rho.is_finite() || rho < 0.0 {
+                return Err(SproinkError::InvalidValue {
+                    field: "temporal_decay_rate",
+                    value: rho,
+                });
+            }
+            if config.current_time.is_none() {
+                return Err(SproinkError::InvalidValue {
+                    field: "current_time",
+                    value: 0.0,
+                });
+            }
         }
         Ok(())
     }
@@ -593,7 +609,8 @@ impl<G: Graph> Engine<G> {
                             a.min_distance[j] = b.min_distance[j];
                             a.seed_source[j] = b.seed_source[j];
                         } else if b.min_distance[j] == a.min_distance[j] {
-                            // Tie-breaking: lower seed source ID wins (None > Some)
+                            // Tie-breaking: named sources win over unnamed (Some > None);
+                            // when both are named, lower ID wins.
                             a.seed_source[j] = match (a.seed_source[j], b.seed_source[j]) {
                                 (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
                                 (Some(_), None) => a.seed_source[j],
@@ -1389,6 +1406,59 @@ mod tests {
         let config = PropagationConfig::builder()
             .temporal_decay_rate(0.01)
             // current_time not set -> should error
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        assert!(engine.activate(&seeds, &config).is_err());
+    }
+
+    #[test]
+    fn temporal_decay_negative_rate_rejected() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .temporal_decay_rate(-0.5)
+            .current_time(100.0)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => {
+                assert_eq!(field, "temporal_decay_rate");
+            }
+        }
+    }
+
+    #[test]
+    fn temporal_decay_nan_rate_rejected() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .temporal_decay_rate(f64::NAN)
+            .current_time(100.0)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        assert!(engine.activate(&seeds, &config).is_err());
+    }
+
+    #[test]
+    fn temporal_decay_inf_rate_rejected() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .temporal_decay_rate(f64::INFINITY)
+            .current_time(100.0)
             .build();
         let seeds = vec![Seed {
             node: NodeId::new(0),
