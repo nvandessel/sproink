@@ -1,17 +1,38 @@
+//! Lateral inhibition (top-M winner-take-all).
+//!
+//! After propagation, suppresses activations outside the top-M active nodes
+//! proportionally to the gap between their activation and the winners' mean.
+
 use typed_builder::TypedBuilder;
 
+/// Configuration for lateral inhibition.
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InhibitionConfig {
+    /// Suppression multiplier applied to losers. Default: `0.15`.
     #[builder(default = 0.15)]
     pub strength: f64,
+    /// Number of top-M winners that are immune to suppression. Default: `7`.
     #[builder(default = 7)]
     pub breadth: usize,
 }
 
+impl Default for InhibitionConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// Trait for inhibition strategies.
 pub trait Inhibitor: Send + Sync {
+    /// Applies inhibition to the activation vector in-place.
     fn inhibit(&self, activations: &mut [f64], config: &InhibitionConfig);
 }
 
+/// Top-M winner-take-all inhibitor.
+///
+/// The top `breadth` nodes keep their activation unchanged. All other active
+/// nodes are suppressed by `strength × (mean_winner − their_activation)`.
 pub struct TopMInhibitor;
 
 impl Inhibitor for TopMInhibitor {

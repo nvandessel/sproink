@@ -1,28 +1,57 @@
+//! Hebbian/Oja learning rule for weight updates.
+//!
+//! After propagation, co-activated node pairs can have their edge weights
+//! updated using Oja's rule, which combines Hebbian strengthening with
+//! a normalization term for stability.
+
 use std::collections::HashSet;
 use typed_builder::TypedBuilder;
 
 use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId};
 
+/// Configuration for Hebbian/Oja learning.
 #[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HebbianConfig {
+    /// Learning rate (η). Default: `0.05`.
     #[builder(default = 0.05)]
     pub learning_rate: f64,
+    /// Minimum allowed edge weight after update. Default: `0.01`.
     #[builder(default = 0.01)]
     pub min_weight: f64,
+    /// Maximum allowed edge weight after update. Default: `0.95`.
     #[builder(default = 0.95)]
     pub max_weight: f64,
+    /// Minimum activation to be considered co-active. Default: `0.15`.
     #[builder(default = 0.15)]
     pub activation_threshold: f64,
 }
 
+impl Default for HebbianConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// A pair of co-activated nodes extracted after propagation.
+///
+/// Pairs are canonically ordered: `node_a < node_b`.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CoActivationPair {
+    /// The lower-ID node.
     pub node_a: NodeId,
+    /// The higher-ID node.
     pub node_b: NodeId,
+    /// Activation of `node_a`.
     pub activation_a: Activation,
+    /// Activation of `node_b`.
     pub activation_b: Activation,
 }
 
+/// Trait for Hebbian weight-update strategies.
 pub trait Learner: Send + Sync {
+    /// Computes a new edge weight given the current weight and both endpoint activations.
     fn update_weight(
         &self,
         current_weight: EdgeWeight,
@@ -32,6 +61,7 @@ pub trait Learner: Send + Sync {
     ) -> EdgeWeight;
 }
 
+/// Oja's rule learner: `ΔW = η · (a_i · a_j − a_j² · W)`.
 pub struct OjaLearner;
 
 impl Learner for OjaLearner {
@@ -61,6 +91,11 @@ impl Learner for OjaLearner {
     }
 }
 
+/// Extracts co-activation pairs from propagation results.
+///
+/// Filters to nodes above `config.activation_threshold`, then returns all
+/// pairs excluding seed-seed combinations. Pairs are canonically ordered.
+#[must_use]
 pub fn extract_co_activation_pairs(
     results: &[ActivationResult],
     seed_nodes: &HashSet<NodeId>,
@@ -158,49 +193,55 @@ mod tests {
     fn extracts_pairs_above_threshold() {
         let results = vec![
             ActivationResult {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.5),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.3),
                 distance: 1,
+                seed_source: None,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.1),
                 distance: 2,
+                seed_source: None,
             },
         ];
         let seeds = HashSet::new();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
         let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].node_a, NodeId(0));
-        assert_eq!(pairs[0].node_b, NodeId(1));
+        assert_eq!(pairs[0].node_a, NodeId::new(0));
+        assert_eq!(pairs[0].node_b, NodeId::new(1));
     }
 
     #[test]
     fn excludes_seed_seed_pairs() {
         let results = vec![
             ActivationResult {
-                node: NodeId(0),
+                node: NodeId::new(0),
                 activation: act(0.8),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
-                node: NodeId(1),
+                node: NodeId::new(1),
                 activation: act(0.7),
                 distance: 0,
+                seed_source: None,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.6),
                 distance: 1,
+                seed_source: None,
             },
         ];
-        let seeds: HashSet<NodeId> = [NodeId(0), NodeId(1)].into();
+        let seeds: HashSet<NodeId> = [NodeId::new(0), NodeId::new(1)].into();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
         let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
         assert_eq!(pairs.len(), 2);
@@ -215,14 +256,16 @@ mod tests {
     fn canonical_ordering_a_less_than_b() {
         let results = vec![
             ActivationResult {
-                node: NodeId(5),
+                node: NodeId::new(5),
                 activation: act(0.5),
                 distance: 1,
+                seed_source: None,
             },
             ActivationResult {
-                node: NodeId(2),
+                node: NodeId::new(2),
                 activation: act(0.4),
                 distance: 1,
+                seed_source: None,
             },
         ];
         let seeds = HashSet::new();

@@ -1,5 +1,9 @@
-/// Apply sigmoid squashing element-wise in-place.
-/// sigmoid(x) = 1 / (1 + exp(-gain * (x - center)))
+//! Sigmoid squashing function for post-propagation normalization.
+
+/// Applies sigmoid squashing element-wise in-place.
+///
+/// For each positive activation `x`, replaces it with
+/// `1 / (1 + exp(-gain × (x − center)))`. Zero values are left unchanged.
 pub fn squash_sigmoid(activations: &mut [f64], gain: f64, center: f64) {
     for v in activations.iter_mut() {
         if *v > 0.0 {

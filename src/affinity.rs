@@ -1,18 +1,44 @@
+//! Tag-based affinity edge generation using Jaccard similarity.
+//!
+//! Given per-node tag sets, generates [`FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+//! edges between nodes whose tags overlap above a configurable threshold.
+
+use typed_builder::TypedBuilder;
+
 use crate::graph::{EdgeInput, EdgeKind};
 use crate::types::{EdgeWeight, NodeId, TagId};
 
+/// Configuration for affinity edge generation.
+#[derive(Debug, Clone, TypedBuilder)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AffinityConfig {
+    /// Maximum edge weight assigned to a perfect Jaccard match. Default: `0.4`.
+    #[builder(default = 0.4)]
     pub max_weight: f64,
+    /// Minimum Jaccard similarity to create an edge. Default: `0.3`.
+    #[builder(default = 0.3)]
     pub min_jaccard: f64,
 }
 
+impl Default for AffinityConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// Trait for generating affinity edges from node tag sets.
 pub trait AffinityGenerator: Send + Sync {
+    /// Generates affinity edges for all node pairs exceeding the similarity threshold.
     fn generate(&self, node_tags: &[Vec<TagId>], config: &AffinityConfig) -> Vec<EdgeInput>;
 }
 
+/// Jaccard-based affinity generator using two-pointer merge on sorted tag slices.
 pub struct JaccardAffinity;
 
-/// Two-pointer merge Jaccard on pre-sorted tag slices.
+/// Computes Jaccard similarity between two sorted tag slices.
+///
+/// Returns `0.0` if either slice is empty.
+#[must_use]
 pub fn jaccard_similarity(a: &[TagId], b: &[TagId]) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
@@ -67,10 +93,11 @@ impl AffinityGenerator for JaccardAffinity {
                 let sim = jaccard_similarity(&node_tags[i], &node_tags[j]);
                 if sim >= config.min_jaccard {
                     edges.push(EdgeInput {
-                        source: NodeId(i as u32),
-                        target: NodeId(j as u32),
+                        source: NodeId::new(i as u32),
+                        target: NodeId::new(j as u32),
                         weight: EdgeWeight::new_unchecked((sim * config.max_weight).min(1.0)),
                         kind: EdgeKind::FeatureAffinity,
+                        last_activated: None,
                     });
                 }
             }
@@ -85,7 +112,7 @@ mod tests {
     use super::*;
 
     fn tag(id: u32) -> TagId {
-        TagId(id)
+        TagId::new(id)
     }
 
     #[test]
@@ -142,8 +169,8 @@ mod tests {
         let generator = JaccardAffinity;
         let edges = generator.generate(&node_tags, &config);
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, NodeId(0));
-        assert_eq!(edges[0].target, NodeId(1));
+        assert_eq!(edges[0].source, NodeId::new(0));
+        assert_eq!(edges[0].target, NodeId::new(1));
         assert_eq!(edges[0].kind, EdgeKind::FeatureAffinity);
         assert!((edges[0].weight.get() - 0.2).abs() < 1e-10);
     }
@@ -158,8 +185,8 @@ mod tests {
         let generator = JaccardAffinity;
         let edges = generator.generate(&node_tags, &config);
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, NodeId(0));
-        assert_eq!(edges[0].target, NodeId(2));
+        assert_eq!(edges[0].source, NodeId::new(0));
+        assert_eq!(edges[0].target, NodeId::new(2));
     }
 
     #[test]

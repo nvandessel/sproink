@@ -1,12 +1,11 @@
-use crate::types::NodeId;
+//! Error types for the sproink engine.
 
+/// Errors that can occur during graph construction or propagation.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SproinkError {
     #[error("invalid {field}: {value} (expected finite value in valid range)")]
     InvalidValue { field: &'static str, value: f64 },
-
-    #[error("node {node:?} out of bounds (graph has {num_nodes} nodes)")]
-    NodeOutOfBounds { node: NodeId, num_nodes: u32 },
 }
 
 #[cfg(test)]
@@ -22,16 +21,5 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("activation"));
         assert!(msg.contains("1.5"));
-    }
-
-    #[test]
-    fn node_out_of_bounds_displays_details() {
-        let err = SproinkError::NodeOutOfBounds {
-            node: NodeId(42),
-            num_nodes: 10,
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("42"));
-        assert!(msg.contains("10"));
     }
 }

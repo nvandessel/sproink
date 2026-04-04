@@ -1,17 +1,9 @@
+mod common;
+
 use proptest::prelude::*;
 use sproink::*;
 
-fn build_chain(n: u32, w: f64) -> CsrGraph {
-    let edges: Vec<EdgeInput> = (0..n - 1)
-        .map(|i| EdgeInput {
-            source: NodeId(i),
-            target: NodeId(i + 1),
-            weight: EdgeWeight::new(w).unwrap(),
-            kind: EdgeKind::Positive,
-        })
-        .collect();
-    CsrGraph::build(n, edges)
-}
+use common::build_chain;
 
 fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
     let mut edges = Vec::new();
@@ -20,10 +12,11 @@ fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
         let target = ((i as u32) * 7 + 13) % num_nodes;
         if source != target {
             edges.push(EdgeInput {
-                source: NodeId(source),
-                target: NodeId(target),
+                source: NodeId::new(source),
+                target: NodeId::new(target),
                 weight: EdgeWeight::new(0.5).unwrap(),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             });
         }
     }
@@ -43,13 +36,14 @@ proptest! {
         let config = PropagationConfig::builder().build();
         let seeds: Vec<Seed> = (0..num_seeds)
             .map(|i| Seed {
-                node: NodeId((i as u32) % num_nodes),
+                node: NodeId::new((i as u32) % num_nodes),
                 activation: Activation::new(0.8).unwrap(),
+            source: None,
             })
             .collect();
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
-            prop_assert!(r.activation.get() >= 0.0 && r.activation.get() <= 1.0,
+            prop_assert!((0.0..=1.0).contains(&r.activation.get()),
                 "Activation {} out of [0,1]", r.activation.get());
         }
     }
@@ -64,11 +58,12 @@ proptest! {
         let graph2 = build_random_graph(num_nodes, num_edges);
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: Activation::new(1.0).unwrap(),
+            source: None,
         }];
-        let r1 = Engine::new(graph1).activate(&seeds, &config);
-        let r2 = Engine::new(graph2).activate(&seeds, &config);
+        let r1 = Engine::new(graph1).activate(&seeds, &config).unwrap();
+        let r2 = Engine::new(graph2).activate(&seeds, &config).unwrap();
         prop_assert_eq!(r1.len(), r2.len());
         for (a, b) in r1.iter().zip(r2.iter()) {
             prop_assert_eq!(a.node, b.node);
@@ -86,10 +81,11 @@ proptest! {
             .min_activation(0.001)
             .build();
         let seeds = vec![Seed {
-            node: NodeId(0),
+            node: NodeId::new(0),
             activation: Activation::new(1.0).unwrap(),
+            source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
 
         // Group by distance and check monotonic decay
         let mut by_distance: Vec<(u32, f64)> = results.iter()
@@ -147,9 +143,9 @@ proptest! {
     ) {
         // Deduplicate and sort for valid Jaccard input
         let mut a: Vec<TagId> = a_raw.into_iter().collect::<std::collections::BTreeSet<_>>()
-            .into_iter().map(TagId).collect();
+            .into_iter().map(TagId::new).collect();
         let mut b: Vec<TagId> = b_raw.into_iter().collect::<std::collections::BTreeSet<_>>()
-            .into_iter().map(TagId).collect();
+            .into_iter().map(TagId::new).collect();
         a.sort();
         b.sort();
 

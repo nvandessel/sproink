@@ -1,3 +1,8 @@
+//! C-compatible FFI bindings for the sproink engine.
+//!
+//! All functions use opaque pointer handles and catch panics at the boundary,
+//! returning null pointers on failure.
+
 use std::collections::HashSet;
 
 use crate::engine::{Engine, PropagationConfig};
@@ -33,6 +38,16 @@ fn edge_kind_from_u8(v: u8) -> EdgeKind {
 
 // --- Graph ---
 
+/// Builds a CSR graph from parallel arrays of edge data.
+///
+/// Returns a heap-allocated `SproinkGraph` pointer, or null on failure.
+/// Free with [`sproink_graph_free()`].
+///
+/// # Safety
+///
+/// - `sources`, `targets`, `weights`, and `kinds` must all be non-null and point
+///   to arrays of at least `num_edges` elements.
+/// - The caller retains no ownership of the input arrays; the graph copies all data.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_graph_build(
     num_nodes: u32,
@@ -57,10 +72,11 @@ pub unsafe extern "C" fn sproink_graph_build(
         for i in 0..n {
             let w = weights[i].clamp(0.0, 1.0);
             edges.push(EdgeInput {
-                source: NodeId(sources[i]),
-                target: NodeId(targets[i]),
+                source: NodeId::new(sources[i]),
+                target: NodeId::new(targets[i]),
                 weight: EdgeWeight::new_unchecked(w),
                 kind: edge_kind_from_u8(kinds[i]),
+                last_activated: None,
             });
         }
 
@@ -72,6 +88,12 @@ pub unsafe extern "C" fn sproink_graph_build(
     }
 }
 
+/// Frees a graph previously returned by [`sproink_graph_build()`].
+///
+/// # Safety
+///
+/// - `graph` must be a pointer returned by `sproink_graph_build()`, or null.
+/// - Must not be called more than once on the same pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
     if !graph.is_null() {
@@ -81,6 +103,16 @@ pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
 
 // --- Activation ---
 
+/// Runs spreading activation on the graph.
+///
+/// Returns a heap-allocated `SproinkResults` pointer, or null on failure.
+/// Free with [`sproink_results_free()`].
+///
+/// # Safety
+///
+/// - `graph` must be a valid pointer returned by `sproink_graph_build()`.
+/// - `seed_nodes` and `seed_activations` must point to arrays of at least
+///   `num_seeds` elements, or be null when `num_seeds == 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_activate(
     graph: *const SproinkGraph,
@@ -112,8 +144,9 @@ pub unsafe extern "C" fn sproink_activate(
                 .iter()
                 .zip(acts.iter())
                 .map(|(&node, &act)| Seed {
-                    node: NodeId(node),
+                    node: NodeId::new(node),
                     activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
+                    source: None,
                 })
                 .collect()
         } else {
@@ -139,10 +172,15 @@ pub unsafe extern "C" fn sproink_activate(
             sigmoid_gain,
             sigmoid_center,
             inhibition,
+            temporal_decay_rate: None,
+            current_time: None,
         };
 
         let engine = Engine::new(graph_ref);
-        let results = engine.activate(&seeds, &config);
+        let results = match engine.activate(&seeds, &config) {
+            Ok(r) => r,
+            Err(_) => return std::ptr::null_mut(),
+        };
 
         Box::into_raw(Box::new(SproinkResults { results }))
     })) {
@@ -153,6 +191,11 @@ pub unsafe extern "C" fn sproink_activate(
 
 // --- Results ---
 
+/// Returns the number of results, or 0 if `results` is null.
+///
+/// # Safety
+///
+/// - `results` must be a valid pointer from `sproink_activate()`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_len(results: *const SproinkResults) -> u32 {
     if results.is_null() {
@@ -164,6 +207,12 @@ pub unsafe extern "C" fn sproink_results_len(results: *const SproinkResults) -> 
     .unwrap_or_default()
 }
 
+/// Copies result node IDs into `out`.
+///
+/// # Safety
+///
+/// - `results` must be a valid pointer from `sproink_activate()`.
+/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, out: *mut u32) {
     if results.is_null() || out.is_null() {
@@ -178,6 +227,12 @@ pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, o
     }));
 }
 
+/// Copies result activation values into `out`.
+///
+/// # Safety
+///
+/// - `results` must be a valid pointer from `sproink_activate()`.
+/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_activations(
     results: *const SproinkResults,
@@ -195,6 +250,12 @@ pub unsafe extern "C" fn sproink_results_activations(
     }));
 }
 
+/// Copies result hop distances into `out`.
+///
+/// # Safety
+///
+/// - `results` must be a valid pointer from `sproink_activate()`.
+/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_distances(results: *const SproinkResults, out: *mut u32) {
     if results.is_null() || out.is_null() {
@@ -209,6 +270,12 @@ pub unsafe extern "C" fn sproink_results_distances(results: *const SproinkResult
     }));
 }
 
+/// Frees results previously returned by [`sproink_activate()`].
+///
+/// # Safety
+///
+/// - `results` must be a pointer returned by `sproink_activate()`, or null.
+/// - Must not be called more than once on the same pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_free(results: *mut SproinkResults) {
     if !results.is_null() {
@@ -218,6 +285,16 @@ pub unsafe extern "C" fn sproink_results_free(results: *mut SproinkResults) {
 
 // --- Co-Activation Pairs ---
 
+/// Extracts co-activation pairs from results.
+///
+/// Returns a heap-allocated `SproinkPairs` pointer, or null on failure.
+/// Free with [`sproink_pairs_free()`].
+///
+/// # Safety
+///
+/// - `results` must be a valid pointer from `sproink_activate()`.
+/// - `seed_nodes` must point to an array of at least `num_seeds` elements,
+///   or be null when `num_seeds == 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_extract_pairs(
     results: *const SproinkResults,
@@ -234,7 +311,7 @@ pub unsafe extern "C" fn sproink_extract_pairs(
 
         let seeds: HashSet<NodeId> = if num_seeds > 0 && !seed_nodes.is_null() {
             let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, num_seeds as usize) };
-            nodes.iter().map(|&n| NodeId(n)).collect()
+            nodes.iter().map(|&n| NodeId::new(n)).collect()
         } else {
             HashSet::new()
         };
@@ -251,6 +328,11 @@ pub unsafe extern "C" fn sproink_extract_pairs(
     }
 }
 
+/// Returns the number of co-activation pairs, or 0 if `pairs` is null.
+///
+/// # Safety
+///
+/// - `pairs` must be a valid pointer from `sproink_extract_pairs()`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_len(pairs: *const SproinkPairs) -> u32 {
     if pairs.is_null() {
@@ -262,6 +344,13 @@ pub unsafe extern "C" fn sproink_pairs_len(pairs: *const SproinkPairs) -> u32 {
     .unwrap_or_default()
 }
 
+/// Copies pair node IDs into `out_a` and `out_b`.
+///
+/// # Safety
+///
+/// - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
+/// - `out_a` and `out_b` must each point to buffers of at least
+///   `sproink_pairs_len(pairs)` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_nodes(
     pairs: *const SproinkPairs,
@@ -282,6 +371,13 @@ pub unsafe extern "C" fn sproink_pairs_nodes(
     }));
 }
 
+/// Copies pair activation values into `out_a` and `out_b`.
+///
+/// # Safety
+///
+/// - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
+/// - `out_a` and `out_b` must each point to buffers of at least
+///   `sproink_pairs_len(pairs)` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_activations(
     pairs: *const SproinkPairs,
@@ -302,6 +398,12 @@ pub unsafe extern "C" fn sproink_pairs_activations(
     }));
 }
 
+/// Frees pairs previously returned by [`sproink_extract_pairs()`].
+///
+/// # Safety
+///
+/// - `pairs` must be a pointer returned by `sproink_extract_pairs()`, or null.
+/// - Must not be called more than once on the same pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_free(pairs: *mut SproinkPairs) {
     if !pairs.is_null() {
@@ -311,6 +413,14 @@ pub unsafe extern "C" fn sproink_pairs_free(pairs: *mut SproinkPairs) {
 
 // --- Learning ---
 
+/// Computes a single Oja weight update.
+///
+/// Returns the updated weight, or `min_weight` on internal failure.
+///
+/// # Safety
+///
+/// This function has no pointer parameters and is always safe to call.
+/// It is marked `unsafe extern "C"` only for FFI compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_oja_update(
     current_weight: f64,
