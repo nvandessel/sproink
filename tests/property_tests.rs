@@ -16,6 +16,7 @@ fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
                 target: NodeId::new(target),
                 weight: EdgeWeight::new(0.5).unwrap(),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             });
         }
     }
@@ -40,7 +41,7 @@ proptest! {
             source: None,
             })
             .collect();
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
         for r in &results {
             prop_assert!((0.0..=1.0).contains(&r.activation.get()),
                 "Activation {} out of [0,1]", r.activation.get());
@@ -61,8 +62,8 @@ proptest! {
             activation: Activation::new(1.0).unwrap(),
             source: None,
         }];
-        let r1 = Engine::new(graph1).activate(&seeds, &config);
-        let r2 = Engine::new(graph2).activate(&seeds, &config);
+        let r1 = Engine::new(graph1).activate(&seeds, &config).unwrap();
+        let r2 = Engine::new(graph2).activate(&seeds, &config).unwrap();
         prop_assert_eq!(r1.len(), r2.len());
         for (a, b) in r1.iter().zip(r2.iter()) {
             prop_assert_eq!(a.node, b.node);
@@ -84,7 +85,7 @@ proptest! {
             activation: Activation::new(1.0).unwrap(),
             source: None,
         }];
-        let results = engine.activate(&seeds, &config);
+        let results = engine.activate(&seeds, &config).unwrap();
 
         // Group by distance and check monotonic decay
         let mut by_distance: Vec<(u32, f64)> = results.iter()

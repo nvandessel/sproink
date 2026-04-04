@@ -38,6 +38,7 @@ pub struct EdgeData {
     pub target: NodeId,
     pub weight: EdgeWeight,
     pub kind: EdgeKind,
+    pub last_activated: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ pub struct EdgeInput {
     pub target: NodeId,
     pub weight: EdgeWeight,
     pub kind: EdgeKind,
+    pub last_activated: Option<f64>,
 }
 
 pub trait Graph: Send + Sync {
@@ -95,6 +97,7 @@ impl CsrGraph {
                 target: NodeId::new(0),
                 weight: EdgeWeight::new_unchecked(0.0),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             })
             .collect();
 
@@ -105,6 +108,7 @@ impl CsrGraph {
                 target: e.target,
                 weight: e.weight,
                 kind: e.kind,
+                last_activated: e.last_activated,
             };
             write_pos[e.source.index()] += 1;
 
@@ -114,6 +118,7 @@ impl CsrGraph {
                 target: e.source,
                 weight: e.weight,
                 kind: e.kind.reverse(),
+                last_activated: e.last_activated,
             };
             write_pos[e.target.index()] += 1;
         }
@@ -172,6 +177,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(0.8),
             kind: EdgeKind::Positive,
+            last_activated: None,
         }];
         let g = CsrGraph::build(2, edges);
         let n0 = g.neighbors(NodeId::new(0));
@@ -191,6 +197,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(0.5),
             kind: EdgeKind::DirectionalSuppressive,
+            last_activated: None,
         }];
         let g = CsrGraph::build(2, edges);
         let n0 = g.neighbors(NodeId::new(0));
@@ -206,6 +213,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(0.6),
             kind: EdgeKind::Conflicts,
+            last_activated: None,
         }];
         let g = CsrGraph::build(2, edges);
         assert_eq!(g.neighbors(NodeId::new(0))[0].kind, EdgeKind::Conflicts);
@@ -219,6 +227,7 @@ mod tests {
             target: NodeId::new(1),
             weight: weight(0.3),
             kind: EdgeKind::FeatureAffinity,
+            last_activated: None,
         }];
         let g = CsrGraph::build(2, edges);
         assert_eq!(
@@ -239,12 +248,14 @@ mod tests {
                 target: NodeId::new(1),
                 weight: weight(0.5),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
             EdgeInput {
                 source: NodeId::new(0),
                 target: NodeId::new(2),
                 weight: weight(0.7),
                 kind: EdgeKind::Positive,
+                last_activated: None,
             },
         ];
         let g = CsrGraph::build(3, edges);
@@ -260,6 +271,7 @@ mod tests {
             target: NodeId::new(0),
             weight: weight(0.5),
             kind: EdgeKind::Positive,
+            last_activated: None,
         }];
         let g = CsrGraph::build(1, edges);
         let n0 = g.neighbors(NodeId::new(0));

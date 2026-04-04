@@ -83,6 +83,7 @@ impl AffinityGenerator for JaccardAffinity {
                         target: NodeId::new(j as u32),
                         weight: EdgeWeight::new_unchecked((sim * config.max_weight).min(1.0)),
                         kind: EdgeKind::FeatureAffinity,
+                        last_activated: None,
                     });
                 }
             }

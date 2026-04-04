@@ -7,6 +7,7 @@ pub fn build_chain(n: u32, w: f64) -> CsrGraph {
             target: NodeId::new(i + 1),
             weight: EdgeWeight::new(w).unwrap(),
             kind: EdgeKind::Positive,
+            last_activated: None,
         })
         .collect();
     CsrGraph::build(n, edges)

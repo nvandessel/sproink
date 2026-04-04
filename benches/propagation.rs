@@ -16,6 +16,7 @@ fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
                     target: NodeId::new(target),
                     weight: EdgeWeight::new(0.5 + 0.3 * ((i + j) % 3) as f64 / 2.0).unwrap(),
                     kind: EdgeKind::Positive,
+                    last_activated: None,
                 });
             }
         }
@@ -34,19 +35,19 @@ fn bench_propagation(c: &mut Criterion) {
     }];
 
     c.bench_function("chain_100", |b| {
-        b.iter(|| e100.activate(black_box(&seeds), black_box(&config)))
+        b.iter(|| e100.activate(black_box(&seeds).unwrap(), black_box(&config)))
     });
 
     let g1k = build_random_graph(1_000, 5);
     let e1k = Engine::new(g1k);
     c.bench_function("random_1k_5e", |b| {
-        b.iter(|| e1k.activate(black_box(&seeds), black_box(&config)))
+        b.iter(|| e1k.activate(black_box(&seeds).unwrap(), black_box(&config)))
     });
 
     let g10k = build_random_graph(10_000, 10);
     let e10k = Engine::new(g10k);
     c.bench_function("random_10k_10e", |b| {
-        b.iter(|| e10k.activate(black_box(&seeds), black_box(&config)))
+        b.iter(|| e10k.activate(black_box(&seeds).unwrap(), black_box(&config)))
     });
 }
 
