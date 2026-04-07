@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.1](https://github.com/nvandessel/sproink/compare/sproink-v0.1.0...sproink-v0.1.1) (2026-04-04)
+## 0.1.0 (2026-04-07)
 
 
 ### Features
@@ -19,3 +19,4 @@
 ### Refactoring
 
 * simplify and polish after code review ([fddc781](https://github.com/nvandessel/sproink/commit/fddc7816b7dfd41df4d57280444b75d12aa98dcb))
+
