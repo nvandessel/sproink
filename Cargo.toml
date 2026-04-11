@@ -2,8 +2,12 @@
 name = "sproink"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "In-memory spreading activation engine with CSR graph"
 license = "Apache-2.0"
+repository = "https://github.com/nvandessel/sproink"
+keywords = ["spreading-activation", "graph", "csr", "memory", "ffi"]
+categories = ["algorithms", "data-structures", "science"]
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]

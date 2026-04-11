@@ -26,15 +26,27 @@ Sproink models associative memory as energy spreading through a weighted graph. 
 use sproink::*;
 
 let graph = CsrGraph::build(3, vec![
-    EdgeInput { source: NodeId(0), target: NodeId(1), weight: EdgeWeight::new(0.8).unwrap(), kind: EdgeKind::Positive },
-    EdgeInput { source: NodeId(1), target: NodeId(2), weight: EdgeWeight::new(0.6).unwrap(), kind: EdgeKind::Positive },
-]);
+    EdgeInput {
+        source: NodeId::new(0), target: NodeId::new(1),
+        weight: EdgeWeight::new(0.8).unwrap(),
+        kind: EdgeKind::Positive, last_activated: None,
+    },
+    EdgeInput {
+        source: NodeId::new(1), target: NodeId::new(2),
+        weight: EdgeWeight::new(0.6).unwrap(),
+        kind: EdgeKind::Positive, last_activated: None,
+    },
+]).unwrap();
 
-let engine = Engine::new(graph);
+let engine = Engine::new(&graph);
 let config = PropagationConfig::builder().build(); // defaults: 3 steps, decay=0.7, spread=0.85
-let seeds = vec![Seed { node: NodeId(0), activation: Activation::new(1.0).unwrap() }];
+let seeds = vec![Seed {
+    node: NodeId::new(0),
+    activation: Activation::new(1.0).unwrap(),
+    source: None,
+}];
 
-let results = engine.activate(&seeds, &config);
+let results = engine.activate(&seeds, &config).unwrap();
 for r in &results {
     println!("node={:?} activation={:.3} distance={}", r.node, r.activation.get(), r.distance);
 }

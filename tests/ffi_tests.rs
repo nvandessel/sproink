@@ -319,7 +319,7 @@ fn activate_with_empty_seeds() {
 fn oja_nan_safety_via_ffi() {
     unsafe {
         let w = sproink_oja_update(0.5, 0.0, 0.0, 0.05, 0.01, 0.95);
-        assert!(w >= 0.01 && w <= 0.95);
+        assert!((0.01..=0.95).contains(&w));
         assert!(!w.is_nan());
     }
 }
