@@ -31,7 +31,7 @@ fn round_trip_graph_build_activate_results() {
             0.01,
             10.0,
             0.3,
-            true,
+            1,
             0.15,
             7,
         );
@@ -72,7 +72,7 @@ fn null_graph_returns_null_results() {
             0.01,
             10.0,
             0.3,
-            true,
+            1,
             0.15,
             7,
         );
@@ -119,7 +119,7 @@ fn pairs_round_trip() {
             0.01,
             10.0,
             0.3,
-            false,
+            0,
             0.15,
             7,
         );
@@ -183,15 +183,15 @@ fn null_pairs_returns_zero_len() {
 #[test]
 fn all_edge_kinds_via_ffi() {
     unsafe {
-        // kinds: 0=Positive, 1=Conflicts, 2=DirSuppressive, 4=FeatureAffinity, 255=unknown→Positive
-        let sources = [0u32, 0, 0, 0, 0];
-        let targets = [1u32, 2, 3, 4, 5];
-        let weights = [0.8, 0.5, 0.5, 0.3, 0.7];
-        let kinds = [0u8, 1, 2, 4, 255];
+        // kinds: 0=Positive, 1=Conflicts, 2=DirSuppressive, 4=FeatureAffinity
+        let sources = [0u32, 0, 0, 0];
+        let targets = [1u32, 2, 3, 4];
+        let weights = [0.8, 0.5, 0.5, 0.3];
+        let kinds = [0u8, 1, 2, 4];
 
         let graph = sproink_graph_build(
-            6,
             5,
+            4,
             sources.as_ptr(),
             targets.as_ptr(),
             weights.as_ptr(),
@@ -212,7 +212,7 @@ fn all_edge_kinds_via_ffi() {
             0.01,
             10.0,
             0.3,
-            true,
+            1,
             0.15,
             7,
         );
@@ -253,7 +253,7 @@ fn null_output_pointers_dont_crash() {
             0.01,
             10.0,
             0.3,
-            false,
+            0,
             0.15,
             7,
         );
@@ -304,7 +304,7 @@ fn activate_with_empty_seeds() {
             0.01,
             10.0,
             0.3,
-            false,
+            0,
             0.15,
             7,
         );
@@ -321,5 +321,25 @@ fn oja_nan_safety_via_ffi() {
         let w = sproink_oja_update(0.5, 0.0, 0.0, 0.05, 0.01, 0.95);
         assert!(w >= 0.01 && w <= 0.95);
         assert!(!w.is_nan());
+    }
+}
+
+#[test]
+fn invalid_edge_kind_returns_null() {
+    unsafe {
+        let sources = [0u32];
+        let targets = [1u32];
+        let weights = [0.8f64];
+        let kinds = [255u8]; // invalid kind
+
+        let graph = sproink_graph_build(
+            2,
+            1,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(graph.is_null(), "Invalid edge kind should return null");
     }
 }
