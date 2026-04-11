@@ -32,9 +32,15 @@ mod tests {
 
     #[test]
     fn well_below_center_near_zero() {
-        let mut v = vec![0.0];
+        // Use a small positive value below the 0.3 center; 0.0 would be skipped
+        // by the zero-skip branch and not exercise sigmoid at all.
+        let mut v = vec![0.05];
         squash_sigmoid(&mut v, 10.0, 0.3);
-        assert!(v[0] < 0.05);
+        assert!(
+            v[0] < 0.1,
+            "expected sigmoid at 0.05 (well below center 0.3) to be near 0, got {}",
+            v[0]
+        );
     }
 
     #[test]

@@ -1,6 +1,9 @@
 use sproink::*;
 
 pub fn build_chain(n: u32, w: f64) -> CsrGraph {
+    if n == 0 {
+        return CsrGraph::build(0, vec![]).unwrap();
+    }
     let edges: Vec<EdgeInput> = (0..n - 1)
         .map(|i| EdgeInput {
             source: NodeId::new(i),
