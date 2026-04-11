@@ -1626,6 +1626,78 @@ mod tests {
     }
 
     #[test]
+    fn sequential_suppression_uses_two_phase_like_parallel() {
+        // Graph: node 0 -> node 2 (Conflicts), node 1 -> node 2 (Positive)
+        // Node 0 (conflict source) has LOWER index than node 1 (positive source).
+        // Sequential iteration processes node 0 first.
+        //
+        // BUG (inline subtraction): when node 0 is processed, new[2] = 0.0,
+        //   inline: new[2] = (0.0 - energy).max(0.0) = 0.0  (no-op)
+        //   then node 1: new[2] = max(0.0, 1.0) = 1.0
+        //   Result: 1.0 (conflict had no effect!)
+        //
+        // CORRECT (two-phase):
+        //   positive_max[2] = 1.0, suppress_delta[2] = 0.5
+        //   new[2] = max(0.0, 1.0) = 1.0, then (1.0 - 0.5).max(0.0) = 0.5
+        let edges = vec![
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(2),
+                weight: weight(0.5),
+                kind: EdgeKind::Conflicts,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(1),
+                target: NodeId::new(2),
+                weight: weight(1.0),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+        ];
+        let graph = CsrGraph::build(3, edges);
+        let engine = Engine::new(&graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.001)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.3)
+            .build();
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(1.0),
+                source: None,
+            },
+            Seed {
+                node: NodeId::new(1),
+                activation: act(1.0),
+                source: None,
+            },
+        ];
+
+        let results = engine.activate(&seeds, &config).unwrap();
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+
+        // Two-phase: positive_max[2]=1.0, suppress_delta[2]=0.5, raw=0.5
+        // After sigmoid: 1/(1+exp(-10*(0.5-0.3)))
+        let expected_raw = 0.5;
+        let expected_squashed = 1.0 / (1.0 + (-10.0_f64 * (expected_raw - 0.3)).exp());
+
+        assert!(
+            (a2 - expected_squashed).abs() < 1e-6,
+            "Sequential path gave node 2 activation {a2}, expected ~{expected_squashed:.6} \
+             (two-phase suppression). If ~0.982, the old inline bug is present."
+        );
+    }
+
+    #[test]
     fn activate_with_steps_and_affinity_final_matches() {
         let edges = vec![EdgeInput {
             source: NodeId::new(0),
