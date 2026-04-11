@@ -56,6 +56,7 @@ impl fmt::Display for NodeId {
 /// [`new_unchecked()`](EdgeWeight::new_unchecked) when the value is known-good.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "f64"))]
 #[repr(transparent)]
 pub struct EdgeWeight(f64);
 
@@ -88,6 +89,28 @@ impl EdgeWeight {
     }
 }
 
+impl Eq for EdgeWeight {}
+
+impl PartialOrd for EdgeWeight {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EdgeWeight {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl TryFrom<f64> for EdgeWeight {
+    type Error = SproinkError;
+
+    fn try_from(v: f64) -> Result<Self, Self::Error> {
+        Self::new(v)
+    }
+}
+
 impl fmt::Display for EdgeWeight {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -97,8 +120,9 @@ impl fmt::Display for EdgeWeight {
 /// Activation level in the range `[0.0, 1.0]`.
 ///
 /// Represents the energy at a node during or after propagation.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "f64"))]
 #[repr(transparent)]
 pub struct Activation(f64);
 
@@ -128,6 +152,28 @@ impl Activation {
     #[must_use]
     pub fn get(self) -> f64 {
         self.0
+    }
+}
+
+impl Eq for Activation {}
+
+impl PartialOrd for Activation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Activation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl TryFrom<f64> for Activation {
+    type Error = SproinkError;
+
+    fn try_from(v: f64) -> Result<Self, Self::Error> {
+        Self::new(v)
     }
 }
 
@@ -175,7 +221,7 @@ impl fmt::Display for TagId {
 ///
 /// Each seed injects energy into a single node. The optional `source` field
 /// tags which external entity originated this seed (for provenance tracking).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Seed {
     /// The node to inject activation into.
@@ -189,7 +235,7 @@ pub struct Seed {
 /// A single node's activation after propagation completes.
 ///
 /// Results are sorted by activation descending, with ties broken by node ID ascending.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ActivationResult {
     /// The activated node.
@@ -307,6 +353,91 @@ mod tests {
         assert_eq!(r.node, NodeId::new(5));
         assert_eq!(r.activation.get(), 0.6);
         assert_eq!(r.distance, 2);
+    }
+
+    // --- Eq/Ord on EdgeWeight ---
+    #[test]
+    fn edge_weight_eq_and_ord() {
+        let a = EdgeWeight::new(0.3).unwrap();
+        let b = EdgeWeight::new(0.7).unwrap();
+        let c = EdgeWeight::new(0.3).unwrap();
+        // Eq: reflexive
+        assert_eq!(a, c);
+        // Ord: compare
+        assert!(a < b);
+        assert!(b > a);
+        // Sort a vec
+        let mut v = vec![b, a, c];
+        v.sort();
+        assert_eq!(v[0].get(), 0.3);
+        assert_eq!(v[2].get(), 0.7);
+    }
+
+    // --- Eq/Ord on Activation ---
+    #[test]
+    fn activation_eq_and_ord() {
+        let a = Activation::new(0.2).unwrap();
+        let b = Activation::new(0.9).unwrap();
+        let c = Activation::new(0.2).unwrap();
+        assert_eq!(a, c);
+        assert!(a < b);
+        let mut v = vec![b, a, c];
+        v.sort();
+        assert_eq!(v[0].get(), 0.2);
+        assert_eq!(v[2].get(), 0.9);
+    }
+
+    // --- Seed Copy ---
+    #[test]
+    fn seed_is_copy() {
+        let s = Seed {
+            node: NodeId::new(0),
+            activation: Activation::new(0.5).unwrap(),
+            source: None,
+        };
+        let s2 = s; // copy
+        let _s3 = s; // use original after copy
+        assert_eq!(s2.node, NodeId::new(0));
+    }
+
+    // --- ActivationResult Copy ---
+    #[test]
+    fn activation_result_is_copy() {
+        let r = ActivationResult {
+            node: NodeId::new(1),
+            activation: Activation::new(0.5).unwrap(),
+            distance: 1,
+            seed_source: None,
+        };
+        let r2 = r; // copy
+        let _r3 = r; // use original after copy
+        assert_eq!(r2.node, NodeId::new(1));
+    }
+
+    // --- Serde deserialization validates ---
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_edge_weight_rejects_nan() {
+        let json = r#"{"node":0,"activation":0.5,"distance":1,"seed_source":null}"#;
+        // First verify normal deser works
+        let _: ActivationResult = serde_json::from_str(json).unwrap();
+
+        // NaN cannot be represented in JSON, but out-of-range can
+        let bad_json = "1.5";
+        let result: Result<EdgeWeight, _> = serde_json::from_str(bad_json);
+        assert!(result.is_err(), "EdgeWeight should reject 1.5 via serde");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_activation_rejects_out_of_range() {
+        let bad_json = "-0.1";
+        let result: Result<Activation, _> = serde_json::from_str(bad_json);
+        assert!(result.is_err(), "Activation should reject -0.1 via serde");
+
+        let bad_json2 = "1.5";
+        let result2: Result<Activation, _> = serde_json::from_str(bad_json2);
+        assert!(result2.is_err(), "Activation should reject 1.5 via serde");
     }
 
     // --- Serde round-trip ---

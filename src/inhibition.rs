@@ -63,7 +63,8 @@ impl Inhibitor for TopMInhibitor {
             / config.breadth as f64;
 
         for &i in &active[config.breadth..] {
-            let suppression = config.strength * (mean_winner - activations[i]);
+            let gap = (mean_winner - activations[i]).max(0.0);
+            let suppression = config.strength * gap;
             activations[i] = (activations[i] - suppression).max(0.0);
         }
     }
