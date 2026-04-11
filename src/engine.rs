@@ -664,7 +664,7 @@ mod tests {
                 last_activated: None,
             })
             .collect();
-        CsrGraph::build(n, edges)
+        CsrGraph::build(n, edges).unwrap()
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -789,7 +789,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -841,7 +841,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1369,7 +1369,7 @@ mod tests {
                 last_activated: Some(0.0), // old: 100h ago
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1550,7 +1550,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1634,7 +1634,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(2)
