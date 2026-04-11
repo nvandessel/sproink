@@ -74,7 +74,13 @@ pub struct PropagationConfig {
     /// Number of propagation steps. Default: `3`.
     #[builder(default = 3)]
     pub max_steps: u32,
-    /// Per-step multiplicative decay applied to energy. Range: `(0.0, 1.0]`. Default: `0.7`.
+    /// Per-step multiplicative decay applied to energy **in transit** between
+    /// nodes. Range: `(0.0, 1.0]`. Default: `0.7`.
+    ///
+    /// Seed activations are **not** decayed across steps — they remain
+    /// anchors whose value persists for the duration of the run. Only the
+    /// contributions that flow outward from those seeds along edges are
+    /// attenuated by `decay_factor` at each step.
     #[builder(default = 0.7)]
     pub decay_factor: f64,
     /// Fraction of a node's energy that spreads to neighbors. Range: `(0.0, 1.0]`. Default: `0.85`.
@@ -191,6 +197,25 @@ impl<G: Graph> Engine<G> {
     /// Runs spreading activation with dynamic tag-based affinity edges.
     ///
     /// `tag_sets` must have exactly `graph.num_nodes()` entries.
+    ///
+    /// # Performance
+    ///
+    /// Dynamic affinity similarity is recomputed **every propagation step**
+    /// over all node pairs that share tags, so this call scales as
+    /// `O(n² · max_steps)` in the worst case. For large graphs prefer
+    /// materializing [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+    /// edges ahead of time via [`CsrGraph::build`](crate::CsrGraph::build) and
+    /// using the plain [`activate`](Engine::activate) path.
+    ///
+    /// # Interaction with static affinity edges
+    ///
+    /// Dynamic affinity computed from `tag_sets` is **independent** of any
+    /// static [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+    /// edges already present in the graph — if both are supplied, their
+    /// contributions are applied **additively** during propagation. Callers
+    /// who want only one source of affinity should omit the other (either
+    /// pass empty `tag_sets` or rebuild the graph without FeatureAffinity
+    /// edges).
     pub fn activate_with_affinity(
         &self,
         seeds: &[Seed],
