@@ -353,6 +353,42 @@ impl<G: Graph> Engine<G> {
     }
 
     fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
+        if !config.decay_factor.is_finite()
+            || config.decay_factor < 0.0
+            || config.decay_factor > 1.0
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "decay_factor",
+                value: config.decay_factor,
+            });
+        }
+        if !config.spread_factor.is_finite()
+            || config.spread_factor < 0.0
+            || config.spread_factor > 1.0
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "spread_factor",
+                value: config.spread_factor,
+            });
+        }
+        if !config.min_activation.is_finite() || config.min_activation < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "min_activation",
+                value: config.min_activation,
+            });
+        }
+        if !config.sigmoid_gain.is_finite() {
+            return Err(SproinkError::InvalidValue {
+                field: "sigmoid_gain",
+                value: config.sigmoid_gain,
+            });
+        }
+        if !config.sigmoid_center.is_finite() {
+            return Err(SproinkError::InvalidValue {
+                field: "sigmoid_center",
+                value: config.sigmoid_center,
+            });
+        }
         if let Some(rho) = config.temporal_decay_rate {
             if !rho.is_finite() || rho < 0.0 {
                 return Err(SproinkError::InvalidValue {
@@ -364,6 +400,14 @@ impl<G: Graph> Engine<G> {
                 return Err(SproinkError::InvalidValue {
                     field: "current_time",
                     value: 0.0,
+                });
+            }
+        }
+        if let Some(t) = config.current_time {
+            if !t.is_finite() {
+                return Err(SproinkError::InvalidValue {
+                    field: "current_time",
+                    value: t,
                 });
             }
         }
@@ -405,6 +449,10 @@ impl<G: Graph> Engine<G> {
     ) {
         let n = self.graph.num_nodes() as usize;
 
+        // Two-phase approach: accumulate positive max and suppression delta
+        // separately, then merge — matching the parallel path semantics.
+        let mut suppress_delta = vec![0.0f64; n];
+
         for i in 0..n {
             if current[i] < config.min_activation {
                 continue;
@@ -437,17 +485,17 @@ impl<G: Graph> Engine<G> {
                     }
                     EdgeKind::Conflicts => {
                         let energy = base_energy / f64::from(counts.conflict);
-                        new[j] = (new[j] - energy).max(0.0);
+                        suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalSuppressive => {
                         let energy = base_energy / f64::from(counts.dir_suppress);
-                        new[j] = (new[j] - energy).max(0.0);
+                        suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalPassive => continue,
                 }
 
                 if distances[i] != u32::MAX {
-                    let candidate = distances[i] + 1;
+                    let candidate = distances[i].saturating_add(1);
                     if candidate < distances[j] {
                         distances[j] = candidate;
                         seed_sources[j] = seed_sources[i];
@@ -474,7 +522,7 @@ impl<G: Graph> Engine<G> {
                             / virtual_count as f64;
                         new[j] = new[j].max(energy);
                         if distances[i] != u32::MAX {
-                            let candidate = distances[i] + 1;
+                            let candidate = distances[i].saturating_add(1);
                             if candidate < distances[j] {
                                 distances[j] = candidate;
                                 seed_sources[j] = seed_sources[i];
@@ -482,6 +530,13 @@ impl<G: Graph> Engine<G> {
                         }
                     }
                 }
+            }
+        }
+
+        // Phase 2: apply accumulated suppression
+        for j in 0..n {
+            if suppress_delta[j] > 0.0 {
+                new[j] = (new[j] - suppress_delta[j]).max(0.0);
             }
         }
     }
@@ -553,7 +608,7 @@ impl<G: Graph> Engine<G> {
                         }
 
                         if distances[i] != u32::MAX {
-                            let candidate = distances[i] + 1;
+                            let candidate = distances[i].saturating_add(1);
                             if candidate < local.min_distance[j] {
                                 local.min_distance[j] = candidate;
                                 local.seed_source[j] = seed_sources[i];
