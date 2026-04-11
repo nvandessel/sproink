@@ -10,7 +10,7 @@ pub fn build_chain(n: u32, w: f64) -> CsrGraph {
             last_activated: None,
         })
         .collect();
-    CsrGraph::build(n, edges)
+    CsrGraph::build(n, edges).unwrap()
 }
 
 pub fn weight(v: f64) -> EdgeWeight {

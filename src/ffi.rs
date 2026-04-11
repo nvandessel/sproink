@@ -25,14 +25,13 @@ pub struct SproinkPairs {
     pairs: Vec<CoActivationPair>,
 }
 
-fn edge_kind_from_u8(v: u8) -> EdgeKind {
+fn edge_kind_from_u8(v: u8) -> Option<EdgeKind> {
     match v {
-        0 => EdgeKind::Positive,
-        1 => EdgeKind::Conflicts,
-        2 => EdgeKind::DirectionalSuppressive,
-        // 3 = DirectionalPassive: not accepted at FFI boundary, default to Positive
-        4 => EdgeKind::FeatureAffinity,
-        _ => EdgeKind::Positive,
+        0 => Some(EdgeKind::Positive),
+        1 => Some(EdgeKind::Conflicts),
+        2 => Some(EdgeKind::DirectionalSuppressive),
+        4 => Some(EdgeKind::FeatureAffinity),
+        _ => None, // 3 (DirectionalPassive) and unknown values rejected
     }
 }
 
@@ -80,7 +79,10 @@ pub unsafe extern "C" fn sproink_graph_build(
             });
         }
 
-        let graph = CsrGraph::build(num_nodes, edges);
+        let graph = match CsrGraph::build(num_nodes, edges) {
+            Ok(g) => g,
+            Err(_) => return std::ptr::null_mut(),
+        };
         Box::into_raw(Box::new(SproinkGraph { inner: graph }))
     })) {
         Ok(ptr) => ptr,
