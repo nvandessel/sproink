@@ -869,8 +869,8 @@ mod tests {
         let config = PropagationConfig::builder()
             .max_steps(1)
             .decay_factor(1.0)
-            .spread_factor(0.0)
-            .min_activation(0.0)
+            .spread_factor(0.01)
+            .min_activation(0.001)
             .sigmoid_gain(1.0)
             .sigmoid_center(0.0)
             .build();
