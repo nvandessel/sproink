@@ -2,11 +2,15 @@
 
 /// Applies sigmoid squashing element-wise in-place.
 ///
-/// For each positive activation `x`, replaces it with
-/// `1 / (1 + exp(-gain × (x − center)))`. Zero values are left unchanged.
+/// For each activation `x` greater than a small epsilon (`1e-9`), replaces it
+/// with `1 / (1 + exp(-gain × (x − center)))`. Values at or below the epsilon
+/// are left unchanged so that exactly-zero and numerically-negligible
+/// activations are not amplified up to the sigmoid baseline (which, at the
+/// default gain/center, would otherwise map `0.0 -> ~0.047`).
 pub fn squash_sigmoid(activations: &mut [f64], gain: f64, center: f64) {
+    const ZERO_EPSILON: f64 = 1e-9;
     for v in activations.iter_mut() {
-        if *v > 0.0 {
+        if *v > ZERO_EPSILON {
             *v = 1.0 / (1.0 + (-gain * (*v - center)).exp());
         }
     }

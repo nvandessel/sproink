@@ -321,14 +321,18 @@ impl<G: Graph> Engine<G> {
             }
         }
 
-        // Post-process
-        if let Some(ref inh_config) = config.inhibition {
-            TopMInhibitor.inhibit(&mut current, inh_config);
-        }
-        squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
-        for v in current.iter_mut() {
-            if *v < config.min_activation {
-                *v = 0.0;
+        // Post-process. When `max_steps == 0`, no propagation occurred, so
+        // returning raw seed activations is less surprising than applying
+        // inhibition/squashing to values the caller just supplied.
+        if config.max_steps > 0 {
+            if let Some(ref inh_config) = config.inhibition {
+                TopMInhibitor.inhibit(&mut current, inh_config);
+            }
+            squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
+            for v in current.iter_mut() {
+                if *v < config.min_activation {
+                    *v = 0.0;
+                }
             }
         }
 
@@ -772,9 +776,50 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let results = engine.activate(&[], &config).unwrap();
-        for r in &results {
-            assert!(r.activation.get() < 0.05);
-        }
+        // With the squash-epsilon fix, zero seeds must not be amplified into
+        // the sigmoid baseline (~0.047), so the result set should be empty.
+        assert!(
+            results.is_empty(),
+            "expected empty results, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn max_steps_zero_returns_raw_seeds() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        // Use the default config otherwise — the test verifies that
+        // inhibition/squashing/min_activation pruning are NOT applied when
+        // max_steps == 0, so callers get their raw seed values back.
+        let config = PropagationConfig::builder().max_steps(0).build();
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.42),
+                source: None,
+            },
+            Seed {
+                node: NodeId::new(2),
+                activation: act(0.17),
+                source: None,
+            },
+        ];
+        let results = engine.activate(&seeds, &config).unwrap();
+        assert_eq!(results.len(), 2);
+        let a0 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .unwrap()
+            .activation
+            .get();
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .unwrap()
+            .activation
+            .get();
+        assert!((a0 - 0.42).abs() < 1e-12);
+        assert!((a2 - 0.17).abs() < 1e-12);
     }
 
     #[test]
