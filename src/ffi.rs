@@ -80,7 +80,10 @@ pub unsafe extern "C" fn sproink_graph_build(
             });
         }
 
-        let graph = CsrGraph::build(num_nodes, edges);
+        let graph = match CsrGraph::build(num_nodes, edges) {
+            Ok(g) => g,
+            Err(_) => return std::ptr::null_mut(),
+        };
         Box::into_raw(Box::new(SproinkGraph { inner: graph }))
     })) {
         Ok(ptr) => ptr,

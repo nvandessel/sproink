@@ -29,7 +29,7 @@ fn three_node_chain_propagation() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(3, edges);
+    let graph = CsrGraph::build(3, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(3)
@@ -87,7 +87,7 @@ fn conflict_triangle() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(3, edges);
+    let graph = CsrGraph::build(3, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(3)
@@ -130,7 +130,7 @@ fn directional_override() {
         kind: EdgeKind::DirectionalSuppressive,
         last_activated: None,
     }];
-    let graph = CsrGraph::build(2, edges);
+    let graph = CsrGraph::build(2, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(1)
@@ -183,7 +183,7 @@ fn affinity_integration() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(3, edges);
+    let graph = CsrGraph::build(3, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(1)
@@ -219,7 +219,7 @@ fn inhibition_plus_sigmoid() {
             last_activated: None,
         })
         .collect();
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(1)
@@ -262,7 +262,7 @@ fn hebbian_round_trip() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(3, edges);
+    let graph = CsrGraph::build(3, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(2)
@@ -313,7 +313,7 @@ fn parallel_produces_valid_results() {
             }
         }
     }
-    let graph = CsrGraph::build(num_nodes, edges);
+    let graph = CsrGraph::build(num_nodes, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder().build();
     let seeds = vec![Seed {
@@ -395,7 +395,7 @@ fn parallel_path_mixed_edge_kinds() {
             }
         }
     }
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder().build();
     let seeds = vec![Seed {
@@ -444,7 +444,7 @@ fn two_seeds_different_sources() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(5, edges);
+    let graph = CsrGraph::build(5, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(4)
@@ -497,7 +497,7 @@ fn display_impls_cover_all_types() {
 /// Exercise Debug impl on CsrGraph
 #[test]
 fn csr_graph_debug_impl() {
-    let graph = CsrGraph::build(3, vec![]);
+    let graph = CsrGraph::build(3, vec![]).unwrap();
     let dbg = format!("{:?}", graph);
     assert!(dbg.contains("CsrGraph"));
     assert!(dbg.contains("num_nodes"));
@@ -575,7 +575,7 @@ fn parallel_dynamic_affinity_with_seed_sources() {
             last_activated: None,
         });
     }
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
 
     // Build tag sets: group nodes into clusters of 100 with shared tags
@@ -639,7 +639,7 @@ fn parallel_directional_passive_skipped() {
             });
         }
     }
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(2)
@@ -677,7 +677,7 @@ fn parallel_asymmetric_seed_sources() {
             }
         }
     }
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(3)
@@ -724,7 +724,7 @@ fn parallel_temporal_decay() {
             });
         }
     }
-    let graph = CsrGraph::build(n, edges);
+    let graph = CsrGraph::build(n, edges).unwrap();
     let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .temporal_decay_rate(0.01)

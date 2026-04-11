@@ -152,7 +152,7 @@ impl<G: Graph> Engine<G> {
     ///     weight: EdgeWeight::new(0.8).unwrap(),
     ///     kind: EdgeKind::Positive,
     ///     last_activated: None,
-    /// }]);
+    /// }]).unwrap();
     ///
     /// let engine = Engine::new(&graph);
     /// let seeds = vec![Seed {
@@ -664,7 +664,7 @@ mod tests {
                 last_activated: None,
             })
             .collect();
-        CsrGraph::build(n, edges)
+        CsrGraph::build(n, edges).unwrap()
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -789,7 +789,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -841,7 +841,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -896,7 +896,7 @@ mod tests {
                 last_activated: None,
             })
             .collect();
-        let graph = CsrGraph::build(n, edges);
+        let graph = CsrGraph::build(n, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().max_steps(1).build();
         let seeds = vec![Seed {
@@ -951,7 +951,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(2, edges);
+        let graph = CsrGraph::build(2, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1058,7 +1058,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(5, edges);
+        let graph = CsrGraph::build(5, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1091,7 +1091,7 @@ mod tests {
                 }
             }
         }
-        CsrGraph::build(num_nodes, edges)
+        CsrGraph::build(num_nodes, edges).unwrap()
     }
 
     #[test]
@@ -1369,7 +1369,7 @@ mod tests {
                 last_activated: Some(0.0), // old: 100h ago
             },
         ];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1490,7 +1490,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(4, edges);
+        let graph = CsrGraph::build(4, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(3)
@@ -1550,7 +1550,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1634,7 +1634,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges);
+        let graph = CsrGraph::build(3, edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(2)

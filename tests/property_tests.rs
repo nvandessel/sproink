@@ -20,7 +20,7 @@ fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
             });
         }
     }
-    CsrGraph::build(num_nodes, edges)
+    CsrGraph::build(num_nodes, edges).unwrap()
 }
 
 proptest! {
