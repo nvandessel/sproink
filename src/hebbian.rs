@@ -62,6 +62,18 @@ pub trait Learner: Send + Sync {
 }
 
 /// Oja's rule learner: `ΔW = η · (a_i · a_j − a_j² · W)`.
+///
+/// # Asymmetry
+///
+/// Oja's rule treats `activation_a` as the **pre-synaptic input** and
+/// `activation_b` as the **post-synaptic output**. The formula is **NOT**
+/// symmetric in `a ↔ b`: swapping the two activations generally produces a
+/// different weight update. Callers using this for undirected edges should
+/// pick a canonical ordering (e.g., always pass the lower-ID node's activation
+/// as `activation_a`).
+///
+/// Within this crate, [`extract_co_activation_pairs`] enforces the canonical
+/// ordering `node_a < node_b`, so downstream Oja updates are deterministic.
 pub struct OjaLearner;
 
 impl Learner for OjaLearner {
@@ -107,7 +119,11 @@ pub fn extract_co_activation_pairs(
         .filter(|r| r.activation.get() >= config.activation_threshold)
         .collect();
 
-    let mut pairs = Vec::with_capacity(active.len() * active.len().saturating_sub(1) / 2);
+    // Capacity: n*(n-1)/2. Use saturating_mul so we can't overflow `usize`
+    // on 32-bit targets with >~65536 active nodes — we prefer a saturated
+    // (possibly conservative) allocation hint to a panic.
+    let mut pairs =
+        Vec::with_capacity(active.len().saturating_mul(active.len().saturating_sub(1)) / 2);
     for i in 0..active.len() {
         for j in (i + 1)..active.len() {
             let (a, b) = if active[i].node < active[j].node {
