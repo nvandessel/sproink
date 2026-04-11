@@ -246,12 +246,30 @@ impl<G: Graph> Engine<G> {
         let mut distance = vec![u32::MAX; n];
         let mut seed_sources: Vec<Option<u32>> = vec![None; n];
 
+        // Track which indices have already been seeded so we can detect
+        // duplicates and combine them by taking the maximum activation.
+        let mut seeded = vec![false; n];
         for seed in seeds {
             let idx = seed.node.index();
-            if idx < n {
-                current[idx] = seed.activation.get();
+            if idx >= n {
+                return Err(SproinkError::InvalidValue {
+                    field: "seed_node",
+                    value: seed.node.get() as f64,
+                });
+            }
+            let value = seed.activation.get();
+            if seeded[idx] {
+                // Duplicate seed on the same node: take the MAX activation.
+                // The first-seen `seed_source` is preserved (we do not
+                // overwrite it on subsequent duplicates).
+                if value > current[idx] {
+                    current[idx] = value;
+                }
+            } else {
+                current[idx] = value;
                 distance[idx] = 0;
                 seed_sources[idx] = seed.source;
+                seeded[idx] = true;
             }
         }
 
@@ -757,6 +775,60 @@ mod tests {
         for r in &results {
             assert!(r.activation.get() < 0.05);
         }
+    }
+
+    #[test]
+    fn out_of_bounds_seed_returns_error() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder().build();
+        let seeds = vec![Seed {
+            node: NodeId::new(99),
+            activation: act(1.0),
+            source: None,
+        }];
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        let SproinkError::InvalidValue { field, .. } = err;
+        assert_eq!(field, "seed_node");
+    }
+
+    #[test]
+    fn duplicate_seeds_take_max_activation() {
+        let graph = build_chain(2, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .decay_factor(1.0)
+            .spread_factor(0.0)
+            .min_activation(0.0)
+            .sigmoid_gain(1.0)
+            .sigmoid_center(0.0)
+            .build();
+        // Three duplicate seeds on node 0 — the max (0.9) must win.
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.2),
+                source: Some(1),
+            },
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.9),
+                source: Some(2),
+            },
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.5),
+                source: Some(3),
+            },
+        ];
+        let results = engine.activate(&seeds, &config).unwrap();
+        let r0 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .expect("node 0 should be present");
+        // First-seen source is preserved across duplicates.
+        assert_eq!(r0.seed_source, Some(1));
     }
 
     #[test]
