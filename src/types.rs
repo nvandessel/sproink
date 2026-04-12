@@ -84,7 +84,10 @@ impl EdgeWeight {
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
-        Self(v)
+        // Canonicalize -0.0 to +0.0 so the Ord contract holds — must mirror
+        // `new()` or the two constructors would produce differently-ordered
+        // equal values.
+        Self(v + 0.0)
     }
 
     /// Returns the inner `f64` value.
@@ -156,7 +159,10 @@ impl Activation {
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
-        Self(v)
+        // Canonicalize -0.0 to +0.0 so the Ord contract holds — must mirror
+        // `new()` or the two constructors would produce differently-ordered
+        // equal values.
+        Self(v + 0.0)
     }
 
     /// Returns the inner `f64` value.
@@ -326,6 +332,16 @@ mod tests {
     }
 
     #[test]
+    fn edge_weight_unchecked_canonicalizes_negative_zero() {
+        let w = EdgeWeight::new_unchecked(-0.0);
+        assert_eq!(w.get(), 0.0);
+        assert!(!w.get().is_sign_negative());
+        let pos = EdgeWeight::new_unchecked(0.0);
+        assert_eq!(w, pos);
+        assert_eq!(w.cmp(&pos), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
     fn edge_weight_canonicalizes_negative_zero() {
         // -0.0 must round-trip to +0.0 so PartialEq and Ord agree.
         let w = EdgeWeight::new(-0.0).unwrap();
@@ -381,6 +397,16 @@ mod tests {
         v.sort();
         assert_eq!(v[0].get(), 0.2);
         assert_eq!(v[2].get(), 0.9);
+    }
+
+    #[test]
+    fn activation_unchecked_canonicalizes_negative_zero() {
+        let a = Activation::new_unchecked(-0.0);
+        assert_eq!(a.get(), 0.0);
+        assert!(!a.get().is_sign_negative());
+        let pos = Activation::new_unchecked(0.0);
+        assert_eq!(a, pos);
+        assert_eq!(a.cmp(&pos), std::cmp::Ordering::Equal);
     }
 
     #[test]
