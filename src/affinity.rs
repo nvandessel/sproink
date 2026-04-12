@@ -9,10 +9,20 @@ use crate::graph::{EdgeInput, EdgeKind};
 use crate::types::{EdgeWeight, NodeId, TagId};
 
 /// Configuration for affinity edge generation.
+///
+/// # Invariants
+///
+/// `max_weight` **must** lie in `[0.0, 1.0]`. The typed-builder cannot enforce
+/// this at compile time, so [`JaccardAffinity::generate`] clamps the final edge
+/// weight into `[0.0, 1.0]` defensively. Passing a value outside `[0.0, 1.0]`
+/// is considered a programming error and produces silently clamped weights
+/// rather than the naive linear scaling.
 #[derive(Debug, Clone, TypedBuilder)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AffinityConfig {
     /// Maximum edge weight assigned to a perfect Jaccard match. Default: `0.4`.
+    ///
+    /// Must be in `[0.0, 1.0]`. See the type-level docs for details.
     #[builder(default = 0.4)]
     pub max_weight: f64,
     /// Minimum Jaccard similarity to create an edge. Default: `0.3`.
@@ -38,8 +48,24 @@ pub struct JaccardAffinity;
 /// Computes Jaccard similarity between two sorted tag slices.
 ///
 /// Returns `0.0` if either slice is empty.
+///
+/// # Contract
+///
+/// The input slices **MUST** be sorted in ascending order and contain unique
+/// elements (no duplicates). Violating this contract produces incorrect
+/// results. In debug builds, violations are caught by `debug_assert!`; in
+/// release builds, the caller is trusted for performance.
 #[must_use]
 pub fn jaccard_similarity(a: &[TagId], b: &[TagId]) -> f64 {
+    debug_assert!(
+        a.windows(2).all(|w| w[0] < w[1]),
+        "jaccard_similarity: slice `a` must be sorted ascending with no duplicates"
+    );
+    debug_assert!(
+        b.windows(2).all(|w| w[0] < w[1]),
+        "jaccard_similarity: slice `b` must be sorted ascending with no duplicates"
+    );
+
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
@@ -95,7 +121,9 @@ impl AffinityGenerator for JaccardAffinity {
                     edges.push(EdgeInput {
                         source: NodeId::new(i as u32),
                         target: NodeId::new(j as u32),
-                        weight: EdgeWeight::new_unchecked((sim * config.max_weight).min(1.0)),
+                        weight: EdgeWeight::new_unchecked(
+                            (sim * config.max_weight).clamp(0.0, 1.0),
+                        ),
                         kind: EdgeKind::FeatureAffinity,
                         last_activated: None,
                     });
@@ -187,6 +215,52 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].source, NodeId::new(0));
         assert_eq!(edges[0].target, NodeId::new(2));
+    }
+
+    #[test]
+    fn negative_max_weight_is_clamped_to_zero() {
+        // Regression: I38 — negative max_weight previously bypassed the
+        // EdgeWeight invariant via new_unchecked.
+        let node_tags = vec![vec![tag(1), tag(2)], vec![tag(1), tag(2)]];
+        let config = AffinityConfig {
+            max_weight: -5.0,
+            min_jaccard: 0.0,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].weight.get(), 0.0);
+    }
+
+    #[test]
+    fn excessive_max_weight_is_clamped_to_one() {
+        let node_tags = vec![vec![tag(1)], vec![tag(1)]];
+        let config = AffinityConfig {
+            max_weight: 50.0,
+            min_jaccard: 0.0,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].weight.get(), 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be sorted")]
+    fn jaccard_debug_asserts_unsorted_input() {
+        let a = vec![tag(3), tag(1), tag(2)];
+        let b = vec![tag(1), tag(2)];
+        let _ = jaccard_similarity(&a, &b);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be sorted")]
+    fn jaccard_debug_asserts_duplicate_input() {
+        // Duplicates violate the unique-elements contract and are rejected by
+        // the same strictly-ascending assertion.
+        let a = vec![tag(1), tag(1), tag(2)];
+        let b = vec![tag(1), tag(2)];
+        let _ = jaccard_similarity(&a, &b);
     }
 
     #[test]

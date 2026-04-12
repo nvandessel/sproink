@@ -4,7 +4,7 @@ Thank you for your interest in contributing! This document covers the developmen
 
 ## Prerequisites
 
-- **Rust 1.83+** (2024 edition)
+- **Rust 1.85+** (2024 edition)
 - **cargo**, **clippy**, **rustfmt** (included with rustup)
 - **cargo-llvm-cov** (optional, for coverage: `cargo install cargo-llvm-cov`)
 

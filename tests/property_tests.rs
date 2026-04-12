@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod common;
 
 use proptest::prelude::*;
@@ -5,7 +6,7 @@ use sproink::*;
 
 use common::build_chain;
 
-fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
+fn build_random_edges(num_nodes: u32, num_edges: usize) -> Vec<EdgeInput> {
     let mut edges = Vec::new();
     for i in 0..num_edges {
         let source = (i as u32) % num_nodes;
@@ -20,7 +21,11 @@ fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
             });
         }
     }
-    CsrGraph::build(num_nodes, edges).unwrap()
+    edges
+}
+
+fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
+    CsrGraph::build(num_nodes, build_random_edges(num_nodes, num_edges)).unwrap()
 }
 
 proptest! {
@@ -48,14 +53,31 @@ proptest! {
         }
     }
 
-    /// Same inputs always produce same outputs (determinism).
+    /// Output is independent of the order of edges supplied to CsrGraph::build.
+    /// This is stronger than trivial determinism: it verifies the engine is
+    /// order-invariant over the input edge list.
     #[test]
     fn deterministic_output(
         num_nodes in 2u32..20,
         num_edges in 1usize..30,
+        perm_seed in 0u64..10_000,
     ) {
-        let graph1 = build_random_graph(num_nodes, num_edges);
-        let graph2 = build_random_graph(num_nodes, num_edges);
+        let edges1 = build_random_edges(num_nodes, num_edges);
+        // Produce a permutation of the same edges via a seed-derived swap sequence.
+        let mut edges2 = edges1.clone();
+        if edges2.len() > 1 {
+            let mut state = perm_seed.wrapping_add(1);
+            for i in (1..edges2.len()).rev() {
+                // xorshift64 -> index in 0..=i
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let j = (state as usize) % (i + 1);
+                edges2.swap(i, j);
+            }
+        }
+        let graph1 = CsrGraph::build(num_nodes, edges1).unwrap();
+        let graph2 = CsrGraph::build(num_nodes, edges2).unwrap();
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
             node: NodeId::new(0),
@@ -67,7 +89,7 @@ proptest! {
         prop_assert_eq!(r1.len(), r2.len());
         for (a, b) in r1.iter().zip(r2.iter()) {
             prop_assert_eq!(a.node, b.node);
-            prop_assert!((a.activation.get() - b.activation.get()).abs() < 1e-15);
+            prop_assert!((a.activation.get() - b.activation.get()).abs() < 1e-10);
         }
     }
 

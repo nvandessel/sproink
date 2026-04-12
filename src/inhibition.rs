@@ -63,7 +63,8 @@ impl Inhibitor for TopMInhibitor {
             / config.breadth as f64;
 
         for &i in &active[config.breadth..] {
-            let suppression = config.strength * (mean_winner - activations[i]);
+            let gap = (mean_winner - activations[i]).max(0.0);
+            let suppression = config.strength * gap;
             activations[i] = (activations[i] - suppression).max(0.0);
         }
     }
@@ -110,12 +111,53 @@ mod tests {
 
     #[test]
     fn tie_breaking_by_node_id() {
-        let mut activations = vec![0.5, 0.5, 0.5];
+        // Four nodes: node 0 clearly wins. Nodes 1, 2, 3 all tie at 0.4.
+        // With breadth=2, the top 2 winners should be nodes 0 and 1 (lower ID
+        // wins the tie). Nodes 2 and 3 should both be suppressed.
+        let mut activations = vec![0.9, 0.4, 0.4, 0.4];
         let inhibitor = TopMInhibitor;
-        inhibitor.inhibit(&mut activations, &config(0.15, 2));
-        assert_eq!(activations[0], 0.5);
-        assert_eq!(activations[1], 0.5);
-        assert_eq!(activations[2], 0.5);
+        inhibitor.inhibit(&mut activations, &config(0.5, 2));
+
+        // Node 0 is a clear winner -> unchanged
+        assert!((activations[0] - 0.9).abs() < 1e-10);
+        // Node 1 wins the tie (lowest ID among the tied) -> unchanged
+        assert!(
+            (activations[1] - 0.4).abs() < 1e-10,
+            "node 1 should win tie and be immune, got {}",
+            activations[1]
+        );
+        // Nodes 2 and 3 lose the tie -> must be strictly suppressed.
+        // mean_winner = (0.9 + 0.4) / 2 = 0.65; gap = 0.25; suppression = 0.125;
+        // new value = 0.275.
+        assert!(
+            activations[2] < 0.4 - 1e-10,
+            "node 2 should be suppressed, got {}",
+            activations[2]
+        );
+        assert!(
+            activations[3] < 0.4 - 1e-10,
+            "node 3 should be suppressed, got {}",
+            activations[3]
+        );
+        assert!((activations[2] - 0.275).abs() < 1e-10);
+        assert!((activations[3] - 0.275).abs() < 1e-10);
+    }
+
+    #[test]
+    fn loser_above_mean_winner_is_not_amplified() {
+        // Winners have high variance: [1.0, 0.05, 0.05], mean_winner ≈ 0.367.
+        // A loser at 0.4 sits above that mean; before the gap-clamp fix the
+        // negative gap would flip the suppression sign and amplify the
+        // loser. After the fix the clamped gap is 0 and the value must not
+        // increase.
+        let mut activations = vec![1.0, 0.05, 0.05, 0.4];
+        let inhibitor = TopMInhibitor;
+        inhibitor.inhibit(&mut activations, &config(0.5, 3));
+        assert!(
+            activations[3] <= 0.4 + 1e-10,
+            "loser was amplified to {}",
+            activations[3]
+        );
     }
 
     #[test]

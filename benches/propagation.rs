@@ -2,8 +2,9 @@
 #[path = "../tests/common/mod.rs"]
 mod common;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use sproink::*;
+use std::hint::black_box;
 
 fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
     let mut edges = Vec::new();

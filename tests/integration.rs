@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod common;
 
 use sproink::*;
@@ -61,10 +62,11 @@ fn three_node_chain_propagation() {
 }
 
 /// Triangle with all conflict edges.
-/// Verify mutual suppression prevents all-active state.
+/// Verify mutual suppression actually reduces activations below a baseline
+/// run without the conflict edges.
 #[test]
 fn conflict_triangle() {
-    let edges = vec![
+    let conflict_edges = vec![
         EdgeInput {
             source: NodeId::new(0),
             target: NodeId::new(1),
@@ -87,8 +89,6 @@ fn conflict_triangle() {
             last_activated: None,
         },
     ];
-    let graph = CsrGraph::build(3, edges).unwrap();
-    let engine = Engine::new(graph);
     let config = PropagationConfig::builder()
         .max_steps(3)
         .min_activation(0.001)
@@ -110,14 +110,41 @@ fn conflict_triangle() {
             source: None,
         },
     ];
-    let results = engine.activate(&seeds, &config).unwrap();
 
-    // Mutual suppression should reduce activations from their seed values
-    for r in &results {
-        // After sigmoid, even suppressed values map to something > 0
-        // but the raw values pre-sigmoid should be reduced
-        assert!(r.activation.get() <= 1.0);
+    // Baseline: same seeds, no edges at all — each node stays at its seed value
+    // (modulo sigmoid squash).
+    let baseline_graph = CsrGraph::build(3, vec![]).unwrap();
+    let baseline = Engine::new(baseline_graph)
+        .activate(&seeds, &config)
+        .unwrap();
+
+    // Conflict run: triangle of mutual conflict edges suppresses each seed.
+    let conflict_graph = CsrGraph::build(3, conflict_edges).unwrap();
+    let conflict = Engine::new(conflict_graph)
+        .activate(&seeds, &config)
+        .unwrap();
+
+    // At least one node must be strictly suppressed relative to baseline.
+    let mut any_suppressed = false;
+    for id in 0..3u32 {
+        let b = find(&baseline, id)
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        let c = find(&conflict, id)
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        assert!(
+            c <= b + 1e-12,
+            "node {id}: conflict activation {c} > baseline {b}"
+        );
+        if c < b - 1e-9 {
+            any_suppressed = true;
+        }
     }
+    assert!(
+        any_suppressed,
+        "conflict edges should strictly suppress at least one node vs. baseline"
+    );
 }
 
 /// DirectionalSuppressive: node 0 suppresses node 1 but not reverse
@@ -206,41 +233,93 @@ fn affinity_integration() {
     assert!(a1 > a2);
 }
 
-/// Full pipeline: propagation + inhibition + sigmoid
+/// Full pipeline: propagation + inhibition + sigmoid.
+/// Verifies inhibition actually suppresses nodes outside the top-breadth
+/// compared to an identical run without inhibition.
 #[test]
 fn inhibition_plus_sigmoid() {
-    let n = 6u32;
-    let edges: Vec<EdgeInput> = (1..n)
-        .map(|i| EdgeInput {
+    // Build a graph where many nodes receive varied activations so there are
+    // clear winners and losers. Seeds land on node 0 and node 1 at different
+    // strengths; each then fans out via weighted positive edges.
+    let n = 10u32;
+    let mut edges = Vec::new();
+    for i in 2..n {
+        // Varying weights so targets end up at different activation levels
+        let w = 0.3 + 0.05 * (i as f64);
+        edges.push(EdgeInput {
             source: NodeId::new(0),
             target: NodeId::new(i),
-            weight: weight(0.8),
+            weight: weight(w),
             kind: EdgeKind::Positive,
             last_activated: None,
-        })
-        .collect();
-    let graph = CsrGraph::build(n, edges).unwrap();
-    let engine = Engine::new(graph);
-    let config = PropagationConfig::builder()
-        .max_steps(1)
-        .min_activation(0.001)
-        .inhibition(InhibitionConfig::builder().strength(0.5).breadth(2).build())
-        .build();
-    let seeds = vec![Seed {
-        node: NodeId::new(0),
-        activation: act(1.0),
-        source: None,
-    }];
-    let results = engine.activate(&seeds, &config).unwrap();
+        });
+        edges.push(EdgeInput {
+            source: NodeId::new(1),
+            target: NodeId::new(i),
+            weight: weight(w * 0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        });
+    }
+    let build_graph = || CsrGraph::build(n, edges.clone()).unwrap();
+    let seeds = vec![
+        Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        },
+        Seed {
+            node: NodeId::new(1),
+            activation: act(0.9),
+            source: None,
+        },
+    ];
 
-    // All results should be in [0, 1]
-    for r in &results {
+    let base_config = PropagationConfig::builder()
+        .max_steps(2)
+        .min_activation(0.001)
+        .build();
+    let inh_config = PropagationConfig::builder()
+        .max_steps(2)
+        .min_activation(0.001)
+        .inhibition(InhibitionConfig::builder().strength(0.9).breadth(2).build())
+        .build();
+
+    let without = Engine::new(build_graph())
+        .activate(&seeds, &base_config)
+        .unwrap();
+    let with_inh = Engine::new(build_graph())
+        .activate(&seeds, &inh_config)
+        .unwrap();
+
+    // All results should be in [0, 1] in both runs.
+    for r in without.iter().chain(with_inh.iter()) {
         assert!((0.0..=1.0).contains(&r.activation.get()));
     }
-    // Results should be sorted
-    for i in 1..results.len() {
-        assert!(results[i - 1].activation.get() >= results[i].activation.get());
+
+    // At least one node outside the top-2 should be strictly suppressed
+    // by inhibition.
+    let mut any_suppressed = false;
+    for id in 0..n {
+        let w_act = find(&without, id)
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        let i_act = find(&with_inh, id)
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        // Inhibition must never strictly increase an activation.
+        assert!(
+            i_act <= w_act + 1e-10,
+            "node {id}: inhibition raised activation from {w_act} to {i_act}"
+        );
+        if i_act < w_act - 1e-6 {
+            any_suppressed = true;
+        }
     }
+    assert!(
+        any_suppressed,
+        "inhibition should strictly suppress at least one loser node"
+    );
 }
 
 /// Hebbian round-trip: propagate -> extract pairs -> update weights
@@ -534,13 +613,16 @@ fn default_impls_match_builder() {
     assert!((ac.max_weight - ab.max_weight).abs() < 1e-15);
 }
 
-/// OjaLearner NaN safety: infinite inputs produce min_weight, not NaN
+/// OjaLearner stability: repeated updates near saturation stay finite and bounded.
+/// Note: the Oja update with valid (finite) inputs cannot produce NaN, so this
+/// test exercises stability under saturating conditions, not the explicit
+/// NaN-fallback branch in the impl.
 #[test]
-fn oja_nan_safety() {
+fn oja_stability_under_saturation() {
     let learner = OjaLearner;
-    let config = HebbianConfig::builder().build();
-    // Use activation values close to 1.0 with a weight near 1.0 to push Oja's rule
-    // toward overflow. Repeated application should stay finite.
+    let config = HebbianConfig::builder()
+        .learning_rate(10.0) // aggressive learning rate to stress the update
+        .build();
     let mut w = EdgeWeight::new(0.95).unwrap();
     for _ in 0..1000 {
         w = learner.update_weight(
@@ -550,6 +632,7 @@ fn oja_nan_safety() {
             &config,
         );
         assert!(w.get().is_finite());
+        assert!(w.get() >= config.min_weight && w.get() <= config.max_weight);
     }
 }
 
@@ -705,6 +788,197 @@ fn parallel_asymmetric_seed_sources() {
     for r in &results {
         assert!((0.0..=1.0).contains(&r.activation.get()));
     }
+}
+
+/// Equivalence between sequential and parallel propagation paths.
+/// Builds the same mixed-edge graph at just-below (1023 nodes -> sequential)
+/// and just-above (1025 nodes -> parallel) the parallel threshold, with the
+/// extra nodes isolated so they produce no activation. Results on nodes
+/// 0..1023 must match within numerical tolerance.
+/// Critical regression test for the two-phase suppression fix (B1/B2).
+#[test]
+fn sequential_parallel_equivalence_across_threshold() {
+    fn build_edges(active_n: u32) -> Vec<EdgeInput> {
+        let mut edges = Vec::new();
+        for i in 0..active_n {
+            // Positive edges
+            let t1 = (i + 7) % active_n;
+            if t1 != i {
+                edges.push(EdgeInput {
+                    source: NodeId::new(i),
+                    target: NodeId::new(t1),
+                    weight: weight(0.6),
+                    kind: EdgeKind::Positive,
+                    last_activated: None,
+                });
+            }
+            // Conflict edges (every 10th node)
+            if i % 10 == 0 {
+                let t2 = (i + 3) % active_n;
+                if t2 != i {
+                    edges.push(EdgeInput {
+                        source: NodeId::new(i),
+                        target: NodeId::new(t2),
+                        weight: weight(0.5),
+                        kind: EdgeKind::Conflicts,
+                        last_activated: None,
+                    });
+                }
+            }
+            // DirectionalSuppressive edges (every 20th node)
+            if i % 20 == 0 {
+                let t3 = (i + 11) % active_n;
+                if t3 != i {
+                    edges.push(EdgeInput {
+                        source: NodeId::new(i),
+                        target: NodeId::new(t3),
+                        weight: weight(0.4),
+                        kind: EdgeKind::DirectionalSuppressive,
+                        last_activated: None,
+                    });
+                }
+            }
+        }
+        edges
+    }
+
+    let active_n = 1023u32;
+    let edges = build_edges(active_n);
+
+    // Graph A: 1023 nodes -> sequential (below threshold of 1024)
+    let graph_seq = CsrGraph::build(active_n, edges.clone()).unwrap();
+    // Graph B: 1025 nodes -> parallel (above threshold). Extra nodes
+    // 1023 and 1024 are isolated.
+    let graph_par = CsrGraph::build(active_n + 2, edges).unwrap();
+
+    let config = PropagationConfig::builder()
+        .max_steps(3)
+        .min_activation(0.001)
+        .build();
+    let seeds = vec![
+        Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(1),
+        },
+        Seed {
+            node: NodeId::new(500),
+            activation: act(0.8),
+            source: Some(2),
+        },
+    ];
+
+    let r_seq = Engine::new(graph_seq).activate(&seeds, &config).unwrap();
+    let r_par = Engine::new(graph_par).activate(&seeds, &config).unwrap();
+
+    // Filter out any isolated-node results from the parallel run (should be none
+    // since isolated nodes receive no activation and are dropped).
+    let r_par_filtered: Vec<&ActivationResult> =
+        r_par.iter().filter(|r| r.node.get() < active_n).collect();
+
+    assert_eq!(
+        r_seq.len(),
+        r_par_filtered.len(),
+        "sequential and parallel produced different result counts"
+    );
+    for (a, b) in r_seq.iter().zip(r_par_filtered.iter()) {
+        assert_eq!(a.node, b.node, "node order diverged");
+        let diff = (a.activation.get() - b.activation.get()).abs();
+        assert!(
+            diff < 1e-10,
+            "node {}: activation diverged seq={} par={} (diff {})",
+            a.node.get(),
+            a.activation.get(),
+            b.activation.get(),
+            diff
+        );
+    }
+}
+
+/// validate_config rejects invalid numeric fields.
+#[test]
+fn validate_config_rejects_invalid_values() {
+    let graph = CsrGraph::build(2, vec![]).unwrap();
+    let engine = Engine::new(graph);
+    let seeds = vec![Seed {
+        node: NodeId::new(0),
+        activation: act(1.0),
+        source: None,
+    }];
+
+    let run = |cfg: PropagationConfig| engine.activate(&seeds, &cfg);
+
+    // decay_factor out of range / NaN
+    assert!(run(PropagationConfig::builder().decay_factor(-0.1).build()).is_err());
+    assert!(run(PropagationConfig::builder().decay_factor(1.1).build()).is_err());
+    assert!(run(PropagationConfig::builder().decay_factor(f64::NAN).build()).is_err());
+    assert!(
+        run(PropagationConfig::builder()
+            .decay_factor(f64::INFINITY)
+            .build())
+        .is_err()
+    );
+
+    // spread_factor NaN / out of range
+    assert!(run(PropagationConfig::builder().spread_factor(f64::NAN).build()).is_err());
+    assert!(run(PropagationConfig::builder().spread_factor(-0.01).build()).is_err());
+    assert!(run(PropagationConfig::builder().spread_factor(1.1).build()).is_err());
+
+    // min_activation negative / NaN
+    assert!(run(PropagationConfig::builder().min_activation(-0.01).build()).is_err());
+    assert!(
+        run(PropagationConfig::builder()
+            .min_activation(f64::NAN)
+            .build())
+        .is_err()
+    );
+
+    // sigmoid_gain NaN
+    assert!(run(PropagationConfig::builder().sigmoid_gain(f64::NAN).build()).is_err());
+    assert!(
+        run(PropagationConfig::builder()
+            .sigmoid_gain(f64::INFINITY)
+            .build())
+        .is_err()
+    );
+
+    // sigmoid_center NaN
+    assert!(
+        run(PropagationConfig::builder()
+            .sigmoid_center(f64::NAN)
+            .build())
+        .is_err()
+    );
+
+    // current_time NaN
+    assert!(run(PropagationConfig::builder().current_time(f64::NAN).build()).is_err());
+
+    // temporal_decay_rate negative / NaN
+    assert!(
+        run(PropagationConfig::builder()
+            .temporal_decay_rate(-0.1)
+            .current_time(1.0)
+            .build())
+        .is_err()
+    );
+    assert!(
+        run(PropagationConfig::builder()
+            .temporal_decay_rate(f64::NAN)
+            .current_time(1.0)
+            .build())
+        .is_err()
+    );
+
+    // temporal_decay_rate set without current_time -> error
+    assert!(
+        run(PropagationConfig::builder()
+            .temporal_decay_rate(0.1)
+            .build())
+        .is_err()
+    );
+
+    // Sanity: a fully valid config still succeeds.
+    assert!(run(PropagationConfig::builder().build()).is_ok());
 }
 
 /// Temporal decay on a large graph exercises the parallel temporal weight path

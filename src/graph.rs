@@ -128,8 +128,32 @@ impl CsrGraph {
     ///
     /// Each input edge is stored bidirectionally. Directional-suppressive edges
     /// have their reverse stored as directional-passive.
+    ///
+    /// # Storage semantics
+    ///
+    /// - **Self-loops** (`source == target`) produce **two** stored edges,
+    ///   both pointing at the same node. Callers that want a self-loop to
+    ///   contribute only once to propagation should insert it a single time
+    ///   and be aware that the CSR representation will still carry two
+    ///   entries.
+    /// - **Duplicate edges are NOT deduplicated.** If the same `(source,
+    ///   target)` pair (or any other combination, including conflicting
+    ///   [`EdgeKind`]s) appears multiple times in `inputs`, each occurrence
+    ///   is stored independently and will all contribute to propagation.
+    ///   Callers must ensure edge uniqueness themselves if that is desired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SproinkError::InvalidValue`] if:
+    /// - any edge's `source` or `target` index is out of bounds for
+    ///   `num_nodes`;
+    /// - any edge has `kind == EdgeKind::DirectionalPassive` — that kind is
+    ///   produced internally as the reverse of
+    ///   [`EdgeKind::DirectionalSuppressive`] and must not be supplied by
+    ///   the caller;
+    /// - the total edge count would overflow `u32`.
     pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Result<Self, SproinkError> {
-        // Validate node IDs
+        // Validate node IDs and reject user-supplied DirectionalPassive edges.
         for e in &inputs {
             if e.source.index() >= num_nodes as usize {
                 return Err(SproinkError::InvalidValue {
@@ -141,6 +165,13 @@ impl CsrGraph {
                 return Err(SproinkError::InvalidValue {
                     field: "edge_target",
                     value: e.target.get() as f64,
+                });
+            }
+            if e.kind == EdgeKind::DirectionalPassive {
+                // DirectionalPassive is an internal reverse-edge marker only.
+                return Err(SproinkError::InvalidValue {
+                    field: "edge_kind",
+                    value: EdgeKind::DirectionalPassive as u8 as f64,
                 });
             }
         }
@@ -373,6 +404,20 @@ mod tests {
             last_activated: None,
         }];
         assert!(CsrGraph::build(2, edges).is_err());
+    }
+
+    #[test]
+    fn build_rejects_user_supplied_directional_passive() {
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::DirectionalPassive,
+            last_activated: None,
+        }];
+        let err = CsrGraph::build(2, edges).unwrap_err();
+        let SproinkError::InvalidValue { field, .. } = err;
+        assert_eq!(field, "edge_kind");
     }
 
     #[test]

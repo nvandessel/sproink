@@ -2,11 +2,15 @@
 
 /// Applies sigmoid squashing element-wise in-place.
 ///
-/// For each positive activation `x`, replaces it with
-/// `1 / (1 + exp(-gain × (x − center)))`. Zero values are left unchanged.
+/// For each activation `x` greater than a small epsilon (`1e-9`), replaces it
+/// with `1 / (1 + exp(-gain × (x − center)))`. Values at or below the epsilon
+/// are left unchanged so that exactly-zero and numerically-negligible
+/// activations are not amplified up to the sigmoid baseline (which, at the
+/// default gain/center, would otherwise map `0.0 -> ~0.047`).
 pub fn squash_sigmoid(activations: &mut [f64], gain: f64, center: f64) {
+    const ZERO_EPSILON: f64 = 1e-9;
     for v in activations.iter_mut() {
-        if *v > 0.0 {
+        if *v > ZERO_EPSILON {
             *v = 1.0 / (1.0 + (-gain * (*v - center)).exp());
         }
     }
@@ -32,9 +36,15 @@ mod tests {
 
     #[test]
     fn well_below_center_near_zero() {
-        let mut v = vec![0.0];
+        // Use a small positive value below the 0.3 center; 0.0 would be skipped
+        // by the zero-skip branch and not exercise sigmoid at all.
+        let mut v = vec![0.05];
         squash_sigmoid(&mut v, 10.0, 0.3);
-        assert!(v[0] < 0.05);
+        assert!(
+            v[0] < 0.1,
+            "expected sigmoid at 0.05 (well below center 0.3) to be near 0, got {}",
+            v[0]
+        );
     }
 
     #[test]
