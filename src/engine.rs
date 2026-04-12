@@ -353,8 +353,10 @@ impl<G: Graph> Engine<G> {
     }
 
     fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
+        // decay_factor and spread_factor are documented as (0.0, 1.0]:
+        // zero would stall propagation entirely, so reject it.
         if !config.decay_factor.is_finite()
-            || config.decay_factor < 0.0
+            || config.decay_factor <= 0.0
             || config.decay_factor > 1.0
         {
             return Err(SproinkError::InvalidValue {
@@ -363,7 +365,7 @@ impl<G: Graph> Engine<G> {
             });
         }
         if !config.spread_factor.is_finite()
-            || config.spread_factor < 0.0
+            || config.spread_factor <= 0.0
             || config.spread_factor > 1.0
         {
             return Err(SproinkError::InvalidValue {
@@ -377,7 +379,9 @@ impl<G: Graph> Engine<G> {
                 value: config.min_activation,
             });
         }
-        if !config.sigmoid_gain.is_finite() {
+        // sigmoid_gain must be positive: zero flattens the sigmoid and a
+        // negative gain inverts it, silently corrupting squashed activations.
+        if !config.sigmoid_gain.is_finite() || config.sigmoid_gain <= 0.0 {
             return Err(SproinkError::InvalidValue {
                 field: "sigmoid_gain",
                 value: config.sigmoid_gain,
@@ -403,13 +407,13 @@ impl<G: Graph> Engine<G> {
                 });
             }
         }
-        if let Some(t) = config.current_time {
-            if !t.is_finite() {
-                return Err(SproinkError::InvalidValue {
-                    field: "current_time",
-                    value: t,
-                });
-            }
+        if let Some(t) = config.current_time
+            && !t.is_finite()
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "current_time",
+                value: t,
+            });
         }
         Ok(())
     }
@@ -1505,6 +1509,69 @@ mod tests {
             source: None,
         }];
         assert!(engine.activate(&seeds, &config).is_err());
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_values() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // decay_factor must be strictly > 0
+        let config = PropagationConfig::builder()
+            .decay_factor(0.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "decay_factor"),
+        }
+
+        // spread_factor must be strictly > 0
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(0.0)
+            .min_activation(0.0)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "spread_factor"),
+        }
+
+        // sigmoid_gain negative inverts the sigmoid and must be rejected
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(-1.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "sigmoid_gain"),
+        }
+
+        // sigmoid_gain zero flattens the sigmoid and must be rejected
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(0.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "sigmoid_gain"),
+        }
     }
 
     #[test]
