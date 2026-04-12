@@ -138,12 +138,17 @@ pub unsafe extern "C" fn sproink_activate(
     if graph.is_null() {
         return std::ptr::null_mut();
     }
+    // Reject silent seed drops: if the caller claims to pass seeds but either
+    // array pointer is null, that's a contract violation — fail loudly.
+    if num_seeds > 0 && (seed_nodes.is_null() || seed_activations.is_null()) {
+        return std::ptr::null_mut();
+    }
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let graph_ref = unsafe { &(*graph).inner };
         let n = num_seeds as usize;
 
-        let seeds: Vec<Seed> = if n > 0 && !seed_nodes.is_null() && !seed_activations.is_null() {
+        let seeds: Vec<Seed> = if n > 0 {
             let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, n) };
             let acts = unsafe { std::slice::from_raw_parts(seed_activations, n) };
             nodes
