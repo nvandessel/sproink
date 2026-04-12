@@ -977,6 +977,21 @@ fn validate_config_rejects_invalid_values() {
         .is_err()
     );
 
+    // inhibition_breadth = 0 should be rejected
+    assert!(
+        run(PropagationConfig::builder()
+            .inhibition(InhibitionConfig::builder().breadth(0).build())
+            .build())
+        .is_err()
+    );
+    // inhibition_strength NaN should be rejected
+    assert!(
+        run(PropagationConfig::builder()
+            .inhibition(InhibitionConfig::builder().strength(f64::NAN).build())
+            .build())
+        .is_err()
+    );
+
     // Sanity: a fully valid config still succeeds.
     assert!(run(PropagationConfig::builder().build()).is_ok());
 }

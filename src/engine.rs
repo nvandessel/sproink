@@ -462,6 +462,9 @@ impl<G: Graph> Engine<G> {
                 value: t,
             });
         }
+        if let Some(ref inh) = config.inhibition {
+            inh.validate()?;
+        }
         Ok(())
     }
 
@@ -687,7 +690,7 @@ impl<G: Graph> Engine<G> {
                                         / virtual_count as f64;
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                                 if distances[i] != u32::MAX {
-                                    let candidate = distances[i] + 1;
+                                    let candidate = distances[i].saturating_add(1);
                                     if candidate < local.min_distance[j] {
                                         local.min_distance[j] = candidate;
                                         local.seed_source[j] = seed_sources[i];
@@ -899,6 +902,22 @@ mod tests {
             .expect("node 0 should be present");
         // First-seen source is preserved across duplicates.
         assert_eq!(r0.seed_source, Some(1));
+        // A single-seed run at 0.9 should produce the same activation as the
+        // deduplication result — proves the max seed actually won.
+        let single_seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(0.9),
+            source: Some(2),
+        }];
+        let single_results = engine.activate(&single_seeds, &config).unwrap();
+        let s0 = single_results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .unwrap();
+        assert!(
+            (r0.activation.get() - s0.activation.get()).abs() < 1e-10,
+            "deduped should match single-seed at max"
+        );
     }
 
     #[test]

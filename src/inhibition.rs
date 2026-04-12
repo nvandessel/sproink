@@ -5,6 +5,8 @@
 
 use typed_builder::TypedBuilder;
 
+use crate::error::SproinkError;
+
 /// Configuration for lateral inhibition.
 #[derive(Debug, Clone, TypedBuilder)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -20,6 +22,25 @@ pub struct InhibitionConfig {
 impl Default for InhibitionConfig {
     fn default() -> Self {
         Self::builder().build()
+    }
+}
+
+impl InhibitionConfig {
+    /// Validates that the config has sane values.
+    pub fn validate(&self) -> Result<(), SproinkError> {
+        if self.breadth == 0 {
+            return Err(SproinkError::InvalidValue {
+                field: "inhibition_breadth",
+                value: 0.0,
+            });
+        }
+        if !self.strength.is_finite() || self.strength < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "inhibition_strength",
+                value: self.strength,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -158,6 +179,23 @@ mod tests {
             "loser was amplified to {}",
             activations[3]
         );
+    }
+
+    #[test]
+    fn validate_rejects_zero_breadth() {
+        let cfg = config(0.15, 0);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_nan_strength() {
+        let cfg = config(f64::NAN, 3);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_defaults() {
+        assert!(InhibitionConfig::default().validate().is_ok());
     }
 
     #[test]

@@ -537,3 +537,45 @@ fn activate_with_null_seed_pointer_returns_null() {
         sproink_graph_free(graph);
     }
 }
+
+#[test]
+fn inhibition_breadth_zero_returns_null() {
+    // InhibitionConfig::validate rejects breadth=0 — the FFI should
+    // propagate that validation error as a null return.
+    unsafe {
+        let sources = [0u32];
+        let targets = [1u32];
+        let weights = [0.5f64];
+        let kinds = [0u8];
+        let graph = sproink_graph_build(
+            2,
+            1,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_acts = [1.0f64];
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_acts.as_ptr(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            1,    // inhibition_enabled = true
+            0.15, // inhibition_strength
+            0,    // inhibition_breadth = 0 → rejected
+        );
+        assert!(results.is_null(), "inhibition_breadth=0 must be rejected");
+
+        sproink_graph_free(graph);
+    }
+}
