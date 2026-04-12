@@ -120,6 +120,23 @@ mod tests {
     }
 
     #[test]
+    fn loser_above_mean_winner_is_not_amplified() {
+        // Winners have high variance: [1.0, 0.05, 0.05], mean_winner ≈ 0.367.
+        // A loser at 0.4 sits above that mean; before the gap-clamp fix the
+        // negative gap would flip the suppression sign and amplify the
+        // loser. After the fix the clamped gap is 0 and the value must not
+        // increase.
+        let mut activations = vec![1.0, 0.05, 0.05, 0.4];
+        let inhibitor = TopMInhibitor;
+        inhibitor.inhibit(&mut activations, &config(0.5, 3));
+        assert!(
+            activations[3] <= 0.4 + 1e-10,
+            "loser was amplified to {}",
+            activations[3]
+        );
+    }
+
+    #[test]
     fn zero_activations_not_counted_as_active() {
         let mut activations = vec![0.8, 0.0, 0.0, 0.0];
         let original = activations.clone();

@@ -1,5 +1,11 @@
 fn main() {
+    // cbindgen scans the entire crate, not just src/ffi.rs — any source
+    // file that exposes a `#[repr(C)]` or `#[unsafe(no_mangle)]` item can
+    // change the generated header, so rerun when any of them change.
     println!("cargo:rerun-if-changed=src/ffi.rs");
+    println!("cargo:rerun-if-changed=src/types.rs");
+    println!("cargo:rerun-if-changed=src/graph.rs");
+    println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
