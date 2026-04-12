@@ -54,8 +54,12 @@ impl fmt::Display for NodeId {
 ///
 /// Construction via [`new()`](EdgeWeight::new) validates the range; use
 /// [`new_unchecked()`](EdgeWeight::new_unchecked) when the value is known-good.
+///
+/// Since NaN values are rejected at construction, `Eq` and `Ord` are safely
+/// implemented using [`f64::total_cmp`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "f64"))]
 #[repr(transparent)]
 pub struct EdgeWeight(f64);
 
@@ -69,7 +73,10 @@ impl EdgeWeight {
                 value: v,
             });
         }
-        Ok(Self(v))
+        // Canonicalize -0.0 to +0.0 so PartialEq (IEEE 754) agrees with Ord
+        // (total_cmp), preserving the Ord contract that `a == b` implies
+        // `a.cmp(&b) == Ordering::Equal`.
+        Ok(Self(v + 0.0))
     }
 
     /// Creates an edge weight without validation. Debug builds panic on invalid values.
@@ -77,7 +84,10 @@ impl EdgeWeight {
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
-        Self(v)
+        // Canonicalize -0.0 to +0.0 so the Ord contract holds — must mirror
+        // `new()` or the two constructors would produce differently-ordered
+        // equal values.
+        Self(v + 0.0)
     }
 
     /// Returns the inner `f64` value.
@@ -85,6 +95,28 @@ impl EdgeWeight {
     #[must_use]
     pub fn get(self) -> f64 {
         self.0
+    }
+}
+
+impl Eq for EdgeWeight {}
+
+impl PartialOrd for EdgeWeight {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EdgeWeight {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl TryFrom<f64> for EdgeWeight {
+    type Error = SproinkError;
+
+    fn try_from(v: f64) -> Result<Self, Self::Error> {
+        Self::new(v)
     }
 }
 
@@ -97,8 +129,12 @@ impl fmt::Display for EdgeWeight {
 /// Activation level in the range `[0.0, 1.0]`.
 ///
 /// Represents the energy at a node during or after propagation.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+///
+/// Since NaN values are rejected at construction, `Eq` and `Ord` are safely
+/// implemented using [`f64::total_cmp`].
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "f64"))]
 #[repr(transparent)]
 pub struct Activation(f64);
 
@@ -112,7 +148,10 @@ impl Activation {
                 value: v,
             });
         }
-        Ok(Self(v))
+        // Canonicalize -0.0 to +0.0 so PartialEq (IEEE 754) agrees with Ord
+        // (total_cmp), preserving the Ord contract that `a == b` implies
+        // `a.cmp(&b) == Ordering::Equal`.
+        Ok(Self(v + 0.0))
     }
 
     /// Creates an activation without validation. Debug builds panic on invalid values.
@@ -120,7 +159,10 @@ impl Activation {
     #[must_use]
     pub fn new_unchecked(v: f64) -> Self {
         debug_assert!(!v.is_nan() && (0.0..=1.0).contains(&v));
-        Self(v)
+        // Canonicalize -0.0 to +0.0 so the Ord contract holds — must mirror
+        // `new()` or the two constructors would produce differently-ordered
+        // equal values.
+        Self(v + 0.0)
     }
 
     /// Returns the inner `f64` value.
@@ -128,6 +170,28 @@ impl Activation {
     #[must_use]
     pub fn get(self) -> f64 {
         self.0
+    }
+}
+
+impl Eq for Activation {}
+
+impl PartialOrd for Activation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Activation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl TryFrom<f64> for Activation {
+    type Error = SproinkError;
+
+    fn try_from(v: f64) -> Result<Self, Self::Error> {
+        Self::new(v)
     }
 }
 
@@ -175,7 +239,7 @@ impl fmt::Display for TagId {
 ///
 /// Each seed injects energy into a single node. The optional `source` field
 /// tags which external entity originated this seed (for provenance tracking).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Seed {
     /// The node to inject activation into.
@@ -189,7 +253,7 @@ pub struct Seed {
 /// A single node's activation after propagation completes.
 ///
 /// Results are sorted by activation descending, with ties broken by node ID ascending.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ActivationResult {
     /// The activated node.
@@ -253,6 +317,51 @@ mod tests {
         assert_eq!(w.get(), 0.5);
     }
 
+    #[test]
+    fn edge_weight_eq_and_ord() {
+        let a = EdgeWeight::new(0.3).unwrap();
+        let b = EdgeWeight::new(0.7).unwrap();
+        let c = EdgeWeight::new(0.3).unwrap();
+        assert_eq!(a, c);
+        assert!(a < b);
+        assert!(b > a);
+        let mut v = [b, a, c];
+        v.sort();
+        assert_eq!(v[0].get(), 0.3);
+        assert_eq!(v[2].get(), 0.7);
+    }
+
+    #[test]
+    fn edge_weight_unchecked_canonicalizes_negative_zero() {
+        let w = EdgeWeight::new_unchecked(-0.0);
+        assert_eq!(w.get(), 0.0);
+        assert!(!w.get().is_sign_negative());
+        let pos = EdgeWeight::new_unchecked(0.0);
+        assert_eq!(w, pos);
+        assert_eq!(w.cmp(&pos), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn edge_weight_canonicalizes_negative_zero() {
+        // -0.0 must round-trip to +0.0 so PartialEq and Ord agree.
+        let w = EdgeWeight::new(-0.0).unwrap();
+        assert_eq!(w.get(), 0.0);
+        assert!(!w.get().is_sign_negative());
+
+        // PartialEq/Ord contract: equal values must compare Equal.
+        let pos = EdgeWeight::new(0.0).unwrap();
+        let neg = EdgeWeight::new(-0.0).unwrap();
+        assert_eq!(pos, neg);
+        assert_eq!(pos.cmp(&neg), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn edge_weight_try_from() {
+        assert!(EdgeWeight::try_from(0.5).is_ok());
+        assert!(EdgeWeight::try_from(1.5).is_err());
+        assert!(EdgeWeight::try_from(f64::NAN).is_err());
+    }
+
     // --- Activation ---
     #[test]
     fn activation_valid_range() {
@@ -277,6 +386,50 @@ mod tests {
         assert_eq!(Activation::new(0.42).unwrap().get(), 0.42);
     }
 
+    #[test]
+    fn activation_eq_and_ord() {
+        let a = Activation::new(0.2).unwrap();
+        let b = Activation::new(0.9).unwrap();
+        let c = Activation::new(0.2).unwrap();
+        assert_eq!(a, c);
+        assert!(a < b);
+        let mut v = [b, a, c];
+        v.sort();
+        assert_eq!(v[0].get(), 0.2);
+        assert_eq!(v[2].get(), 0.9);
+    }
+
+    #[test]
+    fn activation_unchecked_canonicalizes_negative_zero() {
+        let a = Activation::new_unchecked(-0.0);
+        assert_eq!(a.get(), 0.0);
+        assert!(!a.get().is_sign_negative());
+        let pos = Activation::new_unchecked(0.0);
+        assert_eq!(a, pos);
+        assert_eq!(a.cmp(&pos), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn activation_canonicalizes_negative_zero() {
+        // -0.0 must round-trip to +0.0 so PartialEq and Ord agree.
+        let a = Activation::new(-0.0).unwrap();
+        assert_eq!(a.get(), 0.0);
+        assert!(!a.get().is_sign_negative());
+
+        // PartialEq/Ord contract: equal values must compare Equal.
+        let pos = Activation::new(0.0).unwrap();
+        let neg = Activation::new(-0.0).unwrap();
+        assert_eq!(pos, neg);
+        assert_eq!(pos.cmp(&neg), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn activation_try_from() {
+        assert!(Activation::try_from(0.5).is_ok());
+        assert!(Activation::try_from(-0.1).is_err());
+        assert!(Activation::try_from(f64::NAN).is_err());
+    }
+
     // --- TagId ---
     #[test]
     fn tag_id_get_returns_inner() {
@@ -295,6 +448,18 @@ mod tests {
         assert_eq!(s.activation.get(), 0.8);
     }
 
+    #[test]
+    fn seed_is_copy() {
+        let s = Seed {
+            node: NodeId::new(0),
+            activation: Activation::new(0.5).unwrap(),
+            source: None,
+        };
+        let s2 = s;
+        let _s3 = s; // use original after copy
+        assert_eq!(s2.node, NodeId::new(0));
+    }
+
     // --- ActivationResult ---
     #[test]
     fn activation_result_construction() {
@@ -307,6 +472,38 @@ mod tests {
         assert_eq!(r.node, NodeId::new(5));
         assert_eq!(r.activation.get(), 0.6);
         assert_eq!(r.distance, 2);
+    }
+
+    #[test]
+    fn activation_result_is_copy() {
+        let r = ActivationResult {
+            node: NodeId::new(1),
+            activation: Activation::new(0.5).unwrap(),
+            distance: 1,
+            seed_source: None,
+        };
+        let r2 = r;
+        let _r3 = r; // use original after copy
+        assert_eq!(r2.node, NodeId::new(1));
+    }
+
+    // --- Serde deserialization validates ---
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_edge_weight_rejects_out_of_range() {
+        let bad_json = "1.5";
+        let result: Result<EdgeWeight, _> = serde_json::from_str(bad_json);
+        assert!(result.is_err(), "EdgeWeight should reject 1.5 via serde");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_activation_rejects_out_of_range() {
+        let result: Result<Activation, _> = serde_json::from_str("-0.1");
+        assert!(result.is_err(), "Activation should reject -0.1 via serde");
+
+        let result2: Result<Activation, _> = serde_json::from_str("1.5");
+        assert!(result2.is_err(), "Activation should reject 1.5 via serde");
     }
 
     // --- Serde round-trip ---

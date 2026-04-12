@@ -150,7 +150,7 @@ proptest! {
         b.sort();
 
         let j = sproink::jaccard_similarity(&a, &b);
-        prop_assert!(j >= 0.0 && j <= 1.0, "Jaccard {} out of [0,1]", j);
+        prop_assert!((0.0..=1.0).contains(&j), "Jaccard {} out of [0,1]", j);
 
         // Symmetric
         let j2 = sproink::jaccard_similarity(&b, &a);

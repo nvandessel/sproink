@@ -1,8 +1,8 @@
 //! Error types for the sproink engine.
 
 /// Errors that can occur during graph construction or propagation.
-#[derive(Debug, thiserror::Error)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum SproinkError {
     #[error("invalid {field}: {value} (expected finite value in valid range)")]
     InvalidValue { field: &'static str, value: f64 },
@@ -21,5 +21,15 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("activation"));
         assert!(msg.contains("1.5"));
+    }
+
+    #[test]
+    fn sproink_error_is_clone() {
+        let err = SproinkError::InvalidValue {
+            field: "test",
+            value: 0.0,
+        };
+        let err2 = err.clone();
+        assert_eq!(err.to_string(), err2.to_string());
     }
 }
