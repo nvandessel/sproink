@@ -343,3 +343,72 @@ fn invalid_edge_kind_returns_null() {
         assert!(graph.is_null(), "Invalid edge kind should return null");
     }
 }
+
+#[test]
+fn directional_passive_edge_kind_rejected() {
+    // DirectionalPassive (kind=3) is an internal-only marker and must not be
+    // accepted from FFI callers.
+    unsafe {
+        let sources = [0u32];
+        let targets = [1u32];
+        let weights = [0.8f64];
+        let kinds = [3u8];
+
+        let graph = sproink_graph_build(
+            2,
+            1,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(
+            graph.is_null(),
+            "DirectionalPassive edge kind should return null"
+        );
+    }
+}
+
+#[test]
+fn activate_with_null_seed_pointer_returns_null() {
+    // If the caller claims num_seeds > 0 but passes null for either seed
+    // array, sproink_activate must refuse rather than silently dropping
+    // seeds and returning an empty activation.
+    unsafe {
+        let sources = [0u32];
+        let targets = [1u32];
+        let weights = [0.5f64];
+        let kinds = [0u8];
+        let graph = sproink_graph_build(
+            2,
+            1,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let results = sproink_activate(
+            graph,
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+        );
+        assert!(
+            results.is_null(),
+            "activate with null seed arrays must return null"
+        );
+
+        sproink_graph_free(graph);
+    }
+}
