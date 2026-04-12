@@ -73,7 +73,10 @@ impl EdgeWeight {
                 value: v,
             });
         }
-        Ok(Self(v))
+        // Canonicalize -0.0 to +0.0 so PartialEq (IEEE 754) agrees with Ord
+        // (total_cmp), preserving the Ord contract that `a == b` implies
+        // `a.cmp(&b) == Ordering::Equal`.
+        Ok(Self(v + 0.0))
     }
 
     /// Creates an edge weight without validation. Debug builds panic on invalid values.
@@ -142,7 +145,10 @@ impl Activation {
                 value: v,
             });
         }
-        Ok(Self(v))
+        // Canonicalize -0.0 to +0.0 so PartialEq (IEEE 754) agrees with Ord
+        // (total_cmp), preserving the Ord contract that `a == b` implies
+        // `a.cmp(&b) == Ordering::Equal`.
+        Ok(Self(v + 0.0))
     }
 
     /// Creates an activation without validation. Debug builds panic on invalid values.
@@ -313,10 +319,24 @@ mod tests {
         assert_eq!(a, c);
         assert!(a < b);
         assert!(b > a);
-        let mut v = vec![b, a, c];
+        let mut v = [b, a, c];
         v.sort();
         assert_eq!(v[0].get(), 0.3);
         assert_eq!(v[2].get(), 0.7);
+    }
+
+    #[test]
+    fn edge_weight_canonicalizes_negative_zero() {
+        // -0.0 must round-trip to +0.0 so PartialEq and Ord agree.
+        let w = EdgeWeight::new(-0.0).unwrap();
+        assert_eq!(w.get(), 0.0);
+        assert!(!w.get().is_sign_negative());
+
+        // PartialEq/Ord contract: equal values must compare Equal.
+        let pos = EdgeWeight::new(0.0).unwrap();
+        let neg = EdgeWeight::new(-0.0).unwrap();
+        assert_eq!(pos, neg);
+        assert_eq!(pos.cmp(&neg), std::cmp::Ordering::Equal);
     }
 
     #[test]
@@ -357,10 +377,24 @@ mod tests {
         let c = Activation::new(0.2).unwrap();
         assert_eq!(a, c);
         assert!(a < b);
-        let mut v = vec![b, a, c];
+        let mut v = [b, a, c];
         v.sort();
         assert_eq!(v[0].get(), 0.2);
         assert_eq!(v[2].get(), 0.9);
+    }
+
+    #[test]
+    fn activation_canonicalizes_negative_zero() {
+        // -0.0 must round-trip to +0.0 so PartialEq and Ord agree.
+        let a = Activation::new(-0.0).unwrap();
+        assert_eq!(a.get(), 0.0);
+        assert!(!a.get().is_sign_negative());
+
+        // PartialEq/Ord contract: equal values must compare Equal.
+        let pos = Activation::new(0.0).unwrap();
+        let neg = Activation::new(-0.0).unwrap();
+        assert_eq!(pos, neg);
+        assert_eq!(pos.cmp(&neg), std::cmp::Ordering::Equal);
     }
 
     #[test]
