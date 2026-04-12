@@ -63,7 +63,7 @@ struct SproinkResults *sproink_activate(const struct SproinkGraph *graph,
                                         double min_activation,
                                         double sigmoid_gain,
                                         double sigmoid_center,
-                                        bool inhibition_enabled,
+                                        uint8_t inhibition_enabled,
                                         double inhibition_strength,
                                         uint32_t inhibition_breadth);
 

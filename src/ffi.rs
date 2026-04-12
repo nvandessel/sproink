@@ -25,14 +25,13 @@ pub struct SproinkPairs {
     pairs: Vec<CoActivationPair>,
 }
 
-fn edge_kind_from_u8(v: u8) -> EdgeKind {
+fn edge_kind_from_u8(v: u8) -> Option<EdgeKind> {
     match v {
-        0 => EdgeKind::Positive,
-        1 => EdgeKind::Conflicts,
-        2 => EdgeKind::DirectionalSuppressive,
-        // 3 = DirectionalPassive: not accepted at FFI boundary, default to Positive
-        4 => EdgeKind::FeatureAffinity,
-        _ => EdgeKind::Positive,
+        0 => Some(EdgeKind::Positive),
+        1 => Some(EdgeKind::Conflicts),
+        2 => Some(EdgeKind::DirectionalSuppressive),
+        4 => Some(EdgeKind::FeatureAffinity),
+        _ => None, // 3 (DirectionalPassive) and unknown values rejected
     }
 }
 
@@ -70,12 +69,16 @@ pub unsafe extern "C" fn sproink_graph_build(
 
         let mut edges = Vec::with_capacity(n);
         for i in 0..n {
+            let kind = match edge_kind_from_u8(kinds[i]) {
+                Some(k) => k,
+                None => return std::ptr::null_mut(),
+            };
             let w = weights[i].clamp(0.0, 1.0);
             edges.push(EdgeInput {
                 source: NodeId::new(sources[i]),
                 target: NodeId::new(targets[i]),
                 weight: EdgeWeight::new_unchecked(w),
-                kind: edge_kind_from_u8(kinds[i]),
+                kind,
                 last_activated: None,
             });
         }
@@ -128,11 +131,16 @@ pub unsafe extern "C" fn sproink_activate(
     min_activation: f64,
     sigmoid_gain: f64,
     sigmoid_center: f64,
-    inhibition_enabled: bool,
+    inhibition_enabled: u8,
     inhibition_strength: f64,
     inhibition_breadth: u32,
 ) -> *mut SproinkResults {
     if graph.is_null() {
+        return std::ptr::null_mut();
+    }
+    // Reject silent seed drops: if the caller claims to pass seeds but either
+    // array pointer is null, that's a contract violation — fail loudly.
+    if num_seeds > 0 && (seed_nodes.is_null() || seed_activations.is_null()) {
         return std::ptr::null_mut();
     }
 
@@ -140,7 +148,7 @@ pub unsafe extern "C" fn sproink_activate(
         let graph_ref = unsafe { &(*graph).inner };
         let n = num_seeds as usize;
 
-        let seeds: Vec<Seed> = if n > 0 && !seed_nodes.is_null() && !seed_activations.is_null() {
+        let seeds: Vec<Seed> = if n > 0 {
             let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, n) };
             let acts = unsafe { std::slice::from_raw_parts(seed_activations, n) };
             nodes
@@ -156,7 +164,7 @@ pub unsafe extern "C" fn sproink_activate(
             vec![]
         };
 
-        let inhibition = if inhibition_enabled {
+        let inhibition = if inhibition_enabled != 0 {
             Some(
                 InhibitionConfig::builder()
                     .strength(inhibition_strength)
@@ -365,11 +373,13 @@ pub unsafe extern "C" fn sproink_pairs_nodes(
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let p = unsafe { &*pairs };
-        let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
-        let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
-        for ((sa, sb), pair) in out_a.iter_mut().zip(out_b.iter_mut()).zip(&p.pairs) {
-            *sa = pair.node_a.get();
-            *sb = pair.node_b.get();
+        // Write through raw pointers to avoid creating two &mut slices
+        // that could overlap if caller passes same pointer for out_a and out_b.
+        for (idx, pair) in p.pairs.iter().enumerate() {
+            unsafe {
+                out_a.add(idx).write(pair.node_a.get());
+                out_b.add(idx).write(pair.node_b.get());
+            }
         }
     }));
 }
@@ -392,11 +402,13 @@ pub unsafe extern "C" fn sproink_pairs_activations(
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let p = unsafe { &*pairs };
-        let out_a = unsafe { std::slice::from_raw_parts_mut(out_a, p.pairs.len()) };
-        let out_b = unsafe { std::slice::from_raw_parts_mut(out_b, p.pairs.len()) };
-        for ((sa, sb), pair) in out_a.iter_mut().zip(out_b.iter_mut()).zip(&p.pairs) {
-            *sa = pair.activation_a.get();
-            *sb = pair.activation_b.get();
+        // Write through raw pointers to avoid creating two &mut slices
+        // that could overlap if caller passes same pointer for out_a and out_b.
+        for (idx, pair) in p.pairs.iter().enumerate() {
+            unsafe {
+                out_a.add(idx).write(pair.activation_a.get());
+                out_b.add(idx).write(pair.activation_b.get());
+            }
         }
     }));
 }
