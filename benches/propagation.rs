@@ -21,7 +21,7 @@ fn build_random_graph(num_nodes: u32, edges_per_node: u32) -> CsrGraph {
             }
         }
     }
-    CsrGraph::build(num_nodes, edges)
+    CsrGraph::build(num_nodes, edges).unwrap()
 }
 
 fn bench_propagation(c: &mut Criterion) {

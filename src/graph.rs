@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use crate::error::SproinkError;
 use crate::types::{EdgeWeight, NodeId};
 
 /// The kind of relationship an edge represents.
@@ -103,7 +104,7 @@ pub trait Graph: Send + Sync {
 ///     weight: EdgeWeight::new(0.5).unwrap(),
 ///     kind: EdgeKind::Positive,
 ///     last_activated: None,
-/// }]);
+/// }]).unwrap();
 ///
 /// assert_eq!(graph.num_nodes(), 2);
 /// ```
@@ -127,8 +128,23 @@ impl CsrGraph {
     ///
     /// Each input edge is stored bidirectionally. Directional-suppressive edges
     /// have their reverse stored as directional-passive.
-    #[must_use]
-    pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Self {
+    pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Result<Self, SproinkError> {
+        // Validate node IDs
+        for e in &inputs {
+            if e.source.index() >= num_nodes as usize {
+                return Err(SproinkError::InvalidValue {
+                    field: "edge_source",
+                    value: e.source.get() as f64,
+                });
+            }
+            if e.target.index() >= num_nodes as usize {
+                return Err(SproinkError::InvalidValue {
+                    field: "edge_target",
+                    value: e.target.get() as f64,
+                });
+            }
+        }
+
         // Count edges per node (each input produces 2 stored edges)
         let mut counts = vec![0u32; num_nodes as usize];
         for e in &inputs {
@@ -136,10 +152,16 @@ impl CsrGraph {
             counts[e.target.index()] += 1;
         }
 
-        // Build prefix-sum row_offsets
+        // Build prefix-sum row_offsets with overflow checking
         let mut row_offsets = vec![0u32; num_nodes as usize + 1];
         for i in 0..num_nodes as usize {
-            row_offsets[i + 1] = row_offsets[i] + counts[i];
+            row_offsets[i + 1] =
+                row_offsets[i]
+                    .checked_add(counts[i])
+                    .ok_or(SproinkError::InvalidValue {
+                        field: "total_edges",
+                        value: inputs.len() as f64 * 2.0,
+                    })?;
         }
 
         let total_edges = row_offsets[num_nodes as usize] as usize;
@@ -179,11 +201,11 @@ impl CsrGraph {
             write_pos[e.target.index()] += 1;
         }
 
-        CsrGraph {
+        Ok(CsrGraph {
             num_nodes,
             row_offsets,
             edges,
-        }
+        })
     }
 }
 
@@ -219,7 +241,7 @@ mod tests {
 
     #[test]
     fn empty_graph() {
-        let g = CsrGraph::build(5, vec![]);
+        let g = CsrGraph::build(5, vec![]).unwrap();
         assert_eq!(g.num_nodes(), 5);
         for i in 0..5 {
             assert!(g.neighbors(NodeId::new(i)).is_empty());
@@ -235,7 +257,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges);
+        let g = CsrGraph::build(2, edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 1);
         assert_eq!(n0[0].target, NodeId::new(1));
@@ -255,7 +277,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges);
+        let g = CsrGraph::build(2, edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0[0].kind, EdgeKind::DirectionalSuppressive);
         let n1 = g.neighbors(NodeId::new(1));
@@ -271,7 +293,7 @@ mod tests {
             kind: EdgeKind::Conflicts,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges);
+        let g = CsrGraph::build(2, edges).unwrap();
         assert_eq!(g.neighbors(NodeId::new(0))[0].kind, EdgeKind::Conflicts);
         assert_eq!(g.neighbors(NodeId::new(1))[0].kind, EdgeKind::Conflicts);
     }
@@ -285,7 +307,7 @@ mod tests {
             kind: EdgeKind::FeatureAffinity,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges);
+        let g = CsrGraph::build(2, edges).unwrap();
         assert_eq!(
             g.neighbors(NodeId::new(0))[0].kind,
             EdgeKind::FeatureAffinity
@@ -314,7 +336,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let g = CsrGraph::build(3, edges);
+        let g = CsrGraph::build(3, edges).unwrap();
         assert_eq!(g.neighbors(NodeId::new(0)).len(), 2);
         assert_eq!(g.neighbors(NodeId::new(1)).len(), 1);
         assert_eq!(g.neighbors(NodeId::new(2)).len(), 1);
@@ -329,7 +351,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(1, edges);
+        let g = CsrGraph::build(1, edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 2);
         assert!(n0.iter().all(|e| e.target == NodeId::new(0)));
@@ -339,5 +361,29 @@ mod tests {
     fn graph_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<CsrGraph>();
+    }
+
+    #[test]
+    fn build_rejects_out_of_bounds_source() {
+        let edges = vec![EdgeInput {
+            source: NodeId::new(5),
+            target: NodeId::new(0),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        }];
+        assert!(CsrGraph::build(2, edges).is_err());
+    }
+
+    #[test]
+    fn build_rejects_out_of_bounds_target() {
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(10),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        }];
+        assert!(CsrGraph::build(2, edges).is_err());
     }
 }

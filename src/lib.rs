@@ -30,7 +30,7 @@
 //!         kind: EdgeKind::Positive,
 //!         last_activated: None,
 //!     },
-//! ]);
+//! ]).unwrap();
 //!
 //! let engine = Engine::new(&graph);
 //! let seeds = vec![Seed {
