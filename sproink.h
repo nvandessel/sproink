@@ -79,32 +79,51 @@ uint32_t sproink_results_len(const struct SproinkResults *results);
 /**
  * Copies result node IDs into `out`.
  *
+ * Writes at most `min(buffer_len, sproink_results_len(results))` elements.
+ * The number of elements actually written is returned (bounded by both the
+ * buffer capacity and the result count).
+ *
  * # Safety
  *
  * - `results` must be a valid pointer from `sproink_activate()`.
- * - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+ * - `out` must point to a buffer of at least `buffer_len` `u32` elements, or
+ *   be null (in which case this function is a no-op returning 0).
  */
-void sproink_results_nodes(const struct SproinkResults *results, uint32_t *out);
+uint32_t sproink_results_nodes(const struct SproinkResults *results,
+                               uint32_t *out,
+                               uint32_t buffer_len);
 
 /**
  * Copies result activation values into `out`.
  *
+ * Writes at most `min(buffer_len, sproink_results_len(results))` elements
+ * and returns the count.
+ *
  * # Safety
  *
  * - `results` must be a valid pointer from `sproink_activate()`.
- * - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+ * - `out` must point to a buffer of at least `buffer_len` `f64` elements, or
+ *   be null (in which case this function is a no-op returning 0).
  */
-void sproink_results_activations(const struct SproinkResults *results, double *out);
+uint32_t sproink_results_activations(const struct SproinkResults *results,
+                                     double *out,
+                                     uint32_t buffer_len);
 
 /**
  * Copies result hop distances into `out`.
  *
+ * Writes at most `min(buffer_len, sproink_results_len(results))` elements
+ * and returns the count.
+ *
  * # Safety
  *
  * - `results` must be a valid pointer from `sproink_activate()`.
- * - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+ * - `out` must point to a buffer of at least `buffer_len` `u32` elements, or
+ *   be null (in which case this function is a no-op returning 0).
  */
-void sproink_results_distances(const struct SproinkResults *results, uint32_t *out);
+uint32_t sproink_results_distances(const struct SproinkResults *results,
+                                   uint32_t *out,
+                                   uint32_t buffer_len);
 
 /**
  * Frees results previously returned by [`sproink_activate()`].
@@ -145,24 +164,38 @@ uint32_t sproink_pairs_len(const struct SproinkPairs *pairs);
 /**
  * Copies pair node IDs into `out_a` and `out_b`.
  *
+ * Writes at most `min(buffer_len, sproink_pairs_len(pairs))` elements to
+ * each output buffer and returns the count.
+ *
  * # Safety
  *
  * - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
- * - `out_a` and `out_b` must each point to buffers of at least
- *   `sproink_pairs_len(pairs)` elements.
+ * - `out_a` and `out_b` must each point to buffers of at least `buffer_len`
+ *   `u32` elements, or be null (in which case this function is a no-op
+ *   returning 0).
  */
-void sproink_pairs_nodes(const struct SproinkPairs *pairs, uint32_t *out_a, uint32_t *out_b);
+uint32_t sproink_pairs_nodes(const struct SproinkPairs *pairs,
+                             uint32_t *out_a,
+                             uint32_t *out_b,
+                             uint32_t buffer_len);
 
 /**
  * Copies pair activation values into `out_a` and `out_b`.
  *
+ * Writes at most `min(buffer_len, sproink_pairs_len(pairs))` elements to
+ * each output buffer and returns the count.
+ *
  * # Safety
  *
  * - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
- * - `out_a` and `out_b` must each point to buffers of at least
- *   `sproink_pairs_len(pairs)` elements.
+ * - `out_a` and `out_b` must each point to buffers of at least `buffer_len`
+ *   `f64` elements, or be null (in which case this function is a no-op
+ *   returning 0).
  */
-void sproink_pairs_activations(const struct SproinkPairs *pairs, double *out_a, double *out_b);
+uint32_t sproink_pairs_activations(const struct SproinkPairs *pairs,
+                                   double *out_a,
+                                   double *out_b,
+                                   uint32_t buffer_len);
 
 /**
  * Frees pairs previously returned by [`sproink_extract_pairs()`].
@@ -177,7 +210,14 @@ void sproink_pairs_free(struct SproinkPairs *pairs);
 /**
  * Computes a single Oja weight update.
  *
- * Returns the updated weight, or `min_weight` on internal failure.
+ * Returns the updated weight, or `min_weight` on internal failure or invalid
+ * inputs. Inputs are rejected (and `min_weight` returned) if any of:
+ *
+ * - `current_weight`, `activation_a`, `activation_b`, `learning_rate`,
+ *   `min_weight`, or `max_weight` is NaN or infinite
+ * - `learning_rate < 0.0`
+ * - `min_weight < 0.0` or `max_weight > 1.0`
+ * - `min_weight > max_weight`
  *
  * # Safety
  *

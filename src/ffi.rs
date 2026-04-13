@@ -213,72 +213,100 @@ pub unsafe extern "C" fn sproink_results_len(results: *const SproinkResults) -> 
         return 0;
     }
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unsafe { &*results }.results.len() as u32
+        u32::try_from(unsafe { &*results }.results.len()).unwrap_or(u32::MAX)
     }))
     .unwrap_or_default()
 }
 
 /// Copies result node IDs into `out`.
 ///
+/// Writes at most `min(buffer_len, sproink_results_len(results))` elements.
+/// The number of elements actually written is returned (bounded by both the
+/// buffer capacity and the result count).
+///
 /// # Safety
 ///
 /// - `results` must be a valid pointer from `sproink_activate()`.
-/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+/// - `out` must point to a buffer of at least `buffer_len` `u32` elements, or
+///   be null (in which case this function is a no-op returning 0).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sproink_results_nodes(results: *const SproinkResults, out: *mut u32) {
+pub unsafe extern "C" fn sproink_results_nodes(
+    results: *const SproinkResults,
+    out: *mut u32,
+    buffer_len: u32,
+) -> u32 {
     if results.is_null() || out.is_null() {
-        return;
+        return 0;
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
-        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (slot, result) in out.iter_mut().zip(&r.results) {
-            *slot = result.node.get();
+        let n = r.results.len().min(buffer_len as usize);
+        for (idx, result) in r.results.iter().take(n).enumerate() {
+            unsafe { out.add(idx).write(result.node.get()) };
         }
-    }));
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }))
+    .unwrap_or_default()
 }
 
 /// Copies result activation values into `out`.
 ///
+/// Writes at most `min(buffer_len, sproink_results_len(results))` elements
+/// and returns the count.
+///
 /// # Safety
 ///
 /// - `results` must be a valid pointer from `sproink_activate()`.
-/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+/// - `out` must point to a buffer of at least `buffer_len` `f64` elements, or
+///   be null (in which case this function is a no-op returning 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_activations(
     results: *const SproinkResults,
     out: *mut f64,
-) {
+    buffer_len: u32,
+) -> u32 {
     if results.is_null() || out.is_null() {
-        return;
+        return 0;
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
-        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (slot, result) in out.iter_mut().zip(&r.results) {
-            *slot = result.activation.get();
+        let n = r.results.len().min(buffer_len as usize);
+        for (idx, result) in r.results.iter().take(n).enumerate() {
+            unsafe { out.add(idx).write(result.activation.get()) };
         }
-    }));
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }))
+    .unwrap_or_default()
 }
 
 /// Copies result hop distances into `out`.
 ///
+/// Writes at most `min(buffer_len, sproink_results_len(results))` elements
+/// and returns the count.
+///
 /// # Safety
 ///
 /// - `results` must be a valid pointer from `sproink_activate()`.
-/// - `out` must point to a buffer of at least `sproink_results_len(results)` elements.
+/// - `out` must point to a buffer of at least `buffer_len` `u32` elements, or
+///   be null (in which case this function is a no-op returning 0).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sproink_results_distances(results: *const SproinkResults, out: *mut u32) {
+pub unsafe extern "C" fn sproink_results_distances(
+    results: *const SproinkResults,
+    out: *mut u32,
+    buffer_len: u32,
+) -> u32 {
     if results.is_null() || out.is_null() {
-        return;
+        return 0;
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
-        let out = unsafe { std::slice::from_raw_parts_mut(out, r.results.len()) };
-        for (slot, result) in out.iter_mut().zip(&r.results) {
-            *slot = result.distance;
+        let n = r.results.len().min(buffer_len as usize);
+        for (idx, result) in r.results.iter().take(n).enumerate() {
+            unsafe { out.add(idx).write(result.distance) };
         }
-    }));
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }))
+    .unwrap_or_default()
 }
 
 /// Frees results previously returned by [`sproink_activate()`].
@@ -350,67 +378,83 @@ pub unsafe extern "C" fn sproink_pairs_len(pairs: *const SproinkPairs) -> u32 {
         return 0;
     }
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unsafe { &*pairs }.pairs.len() as u32
+        u32::try_from(unsafe { &*pairs }.pairs.len()).unwrap_or(u32::MAX)
     }))
     .unwrap_or_default()
 }
 
 /// Copies pair node IDs into `out_a` and `out_b`.
 ///
+/// Writes at most `min(buffer_len, sproink_pairs_len(pairs))` elements to
+/// each output buffer and returns the count.
+///
 /// # Safety
 ///
 /// - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
-/// - `out_a` and `out_b` must each point to buffers of at least
-///   `sproink_pairs_len(pairs)` elements.
+/// - `out_a` and `out_b` must each point to buffers of at least `buffer_len`
+///   `u32` elements, or be null (in which case this function is a no-op
+///   returning 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_nodes(
     pairs: *const SproinkPairs,
     out_a: *mut u32,
     out_b: *mut u32,
-) {
+    buffer_len: u32,
+) -> u32 {
     if pairs.is_null() || out_a.is_null() || out_b.is_null() {
-        return;
+        return 0;
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let p = unsafe { &*pairs };
+        let n = p.pairs.len().min(buffer_len as usize);
         // Write through raw pointers to avoid creating two &mut slices
         // that could overlap if caller passes same pointer for out_a and out_b.
-        for (idx, pair) in p.pairs.iter().enumerate() {
+        for (idx, pair) in p.pairs.iter().take(n).enumerate() {
             unsafe {
                 out_a.add(idx).write(pair.node_a.get());
                 out_b.add(idx).write(pair.node_b.get());
             }
         }
-    }));
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }))
+    .unwrap_or_default()
 }
 
 /// Copies pair activation values into `out_a` and `out_b`.
 ///
+/// Writes at most `min(buffer_len, sproink_pairs_len(pairs))` elements to
+/// each output buffer and returns the count.
+///
 /// # Safety
 ///
 /// - `pairs` must be a valid pointer from `sproink_extract_pairs()`.
-/// - `out_a` and `out_b` must each point to buffers of at least
-///   `sproink_pairs_len(pairs)` elements.
+/// - `out_a` and `out_b` must each point to buffers of at least `buffer_len`
+///   `f64` elements, or be null (in which case this function is a no-op
+///   returning 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_activations(
     pairs: *const SproinkPairs,
     out_a: *mut f64,
     out_b: *mut f64,
-) {
+    buffer_len: u32,
+) -> u32 {
     if pairs.is_null() || out_a.is_null() || out_b.is_null() {
-        return;
+        return 0;
     }
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let p = unsafe { &*pairs };
+        let n = p.pairs.len().min(buffer_len as usize);
         // Write through raw pointers to avoid creating two &mut slices
         // that could overlap if caller passes same pointer for out_a and out_b.
-        for (idx, pair) in p.pairs.iter().enumerate() {
+        for (idx, pair) in p.pairs.iter().take(n).enumerate() {
             unsafe {
                 out_a.add(idx).write(pair.activation_a.get());
                 out_b.add(idx).write(pair.activation_b.get());
             }
         }
-    }));
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }))
+    .unwrap_or_default()
 }
 
 /// Frees pairs previously returned by [`sproink_extract_pairs()`].
@@ -430,7 +474,14 @@ pub unsafe extern "C" fn sproink_pairs_free(pairs: *mut SproinkPairs) {
 
 /// Computes a single Oja weight update.
 ///
-/// Returns the updated weight, or `min_weight` on internal failure.
+/// Returns the updated weight, or `min_weight` on internal failure or invalid
+/// inputs. Inputs are rejected (and `min_weight` returned) if any of:
+///
+/// - `current_weight`, `activation_a`, `activation_b`, `learning_rate`,
+///   `min_weight`, or `max_weight` is NaN or infinite
+/// - `learning_rate < 0.0`
+/// - `min_weight < 0.0` or `max_weight > 1.0`
+/// - `min_weight > max_weight`
 ///
 /// # Safety
 ///
@@ -445,6 +496,25 @@ pub unsafe extern "C" fn sproink_oja_update(
     min_weight: f64,
     max_weight: f64,
 ) -> f64 {
+    // Validate all inputs up front. Any NaN/Inf or out-of-range config is an
+    // immediate failure returning `min_weight` (documented error sentinel).
+    // Checking `is_finite` on every f64 parameter also rejects NaN, which
+    // would otherwise survive `clamp(0.0, 1.0)` untouched and corrupt the
+    // Oja computation downstream.
+    if !current_weight.is_finite()
+        || !activation_a.is_finite()
+        || !activation_b.is_finite()
+        || !learning_rate.is_finite()
+        || !min_weight.is_finite()
+        || !max_weight.is_finite()
+        || learning_rate < 0.0
+        || min_weight < 0.0
+        || max_weight > 1.0
+        || min_weight > max_weight
+    {
+        return min_weight;
+    }
+
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let w = EdgeWeight::new_unchecked(current_weight.clamp(0.0, 1.0));
         let a = Activation::new_unchecked(activation_a.clamp(0.0, 1.0));

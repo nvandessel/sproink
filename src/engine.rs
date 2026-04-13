@@ -74,7 +74,13 @@ pub struct PropagationConfig {
     /// Number of propagation steps. Default: `3`.
     #[builder(default = 3)]
     pub max_steps: u32,
-    /// Per-step multiplicative decay applied to energy. Range: `(0.0, 1.0]`. Default: `0.7`.
+    /// Per-step multiplicative decay applied to energy **in transit** between
+    /// nodes. Range: `(0.0, 1.0]`. Default: `0.7`.
+    ///
+    /// Seed activations are **not** decayed across steps — they remain
+    /// anchors whose value persists for the duration of the run. Only the
+    /// contributions that flow outward from those seeds along edges are
+    /// attenuated by `decay_factor` at each step.
     #[builder(default = 0.7)]
     pub decay_factor: f64,
     /// Fraction of a node's energy that spreads to neighbors. Range: `(0.0, 1.0]`. Default: `0.85`.
@@ -191,6 +197,25 @@ impl<G: Graph> Engine<G> {
     /// Runs spreading activation with dynamic tag-based affinity edges.
     ///
     /// `tag_sets` must have exactly `graph.num_nodes()` entries.
+    ///
+    /// # Performance
+    ///
+    /// Dynamic affinity similarity is recomputed **every propagation step**
+    /// over all node pairs that share tags, so this call scales as
+    /// `O(n² · max_steps)` in the worst case. For large graphs prefer
+    /// materializing [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+    /// edges ahead of time via [`CsrGraph::build`](crate::CsrGraph::build) and
+    /// using the plain [`activate`](Engine::activate) path.
+    ///
+    /// # Interaction with static affinity edges
+    ///
+    /// Dynamic affinity computed from `tag_sets` is **independent** of any
+    /// static [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+    /// edges already present in the graph — if both are supplied, their
+    /// contributions are applied **additively** during propagation. Callers
+    /// who want only one source of affinity should omit the other (either
+    /// pass empty `tag_sets` or rebuild the graph without FeatureAffinity
+    /// edges).
     pub fn activate_with_affinity(
         &self,
         seeds: &[Seed],
@@ -246,12 +271,30 @@ impl<G: Graph> Engine<G> {
         let mut distance = vec![u32::MAX; n];
         let mut seed_sources: Vec<Option<u32>> = vec![None; n];
 
+        // Track which indices have already been seeded so we can detect
+        // duplicates and combine them by taking the maximum activation.
+        let mut seeded = vec![false; n];
         for seed in seeds {
             let idx = seed.node.index();
-            if idx < n {
-                current[idx] = seed.activation.get();
+            if idx >= n {
+                return Err(SproinkError::InvalidValue {
+                    field: "seed_node",
+                    value: seed.node.get() as f64,
+                });
+            }
+            let value = seed.activation.get();
+            if seeded[idx] {
+                // Duplicate seed on the same node: take the MAX activation.
+                // The first-seen `seed_source` is preserved (we do not
+                // overwrite it on subsequent duplicates).
+                if value > current[idx] {
+                    current[idx] = value;
+                }
+            } else {
+                current[idx] = value;
                 distance[idx] = 0;
                 seed_sources[idx] = seed.source;
+                seeded[idx] = true;
             }
         }
 
@@ -303,14 +346,18 @@ impl<G: Graph> Engine<G> {
             }
         }
 
-        // Post-process
-        if let Some(ref inh_config) = config.inhibition {
-            TopMInhibitor.inhibit(&mut current, inh_config);
-        }
-        squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
-        for v in current.iter_mut() {
-            if *v < config.min_activation {
-                *v = 0.0;
+        // Post-process. When `max_steps == 0`, no propagation occurred, so
+        // returning raw seed activations is less surprising than applying
+        // inhibition/squashing to values the caller just supplied.
+        if config.max_steps > 0 {
+            if let Some(ref inh_config) = config.inhibition {
+                TopMInhibitor.inhibit(&mut current, inh_config);
+            }
+            squash_sigmoid(&mut current, config.sigmoid_gain, config.sigmoid_center);
+            for v in current.iter_mut() {
+                if *v < config.min_activation {
+                    *v = 0.0;
+                }
             }
         }
 
@@ -353,6 +400,46 @@ impl<G: Graph> Engine<G> {
     }
 
     fn validate_config(config: &PropagationConfig) -> Result<(), SproinkError> {
+        // decay_factor and spread_factor are documented as (0.0, 1.0]:
+        // zero would stall propagation entirely, so reject it.
+        if !config.decay_factor.is_finite()
+            || config.decay_factor <= 0.0
+            || config.decay_factor > 1.0
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "decay_factor",
+                value: config.decay_factor,
+            });
+        }
+        if !config.spread_factor.is_finite()
+            || config.spread_factor <= 0.0
+            || config.spread_factor > 1.0
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "spread_factor",
+                value: config.spread_factor,
+            });
+        }
+        if !config.min_activation.is_finite() || config.min_activation < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "min_activation",
+                value: config.min_activation,
+            });
+        }
+        // sigmoid_gain must be positive: zero flattens the sigmoid and a
+        // negative gain inverts it, silently corrupting squashed activations.
+        if !config.sigmoid_gain.is_finite() || config.sigmoid_gain <= 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "sigmoid_gain",
+                value: config.sigmoid_gain,
+            });
+        }
+        if !config.sigmoid_center.is_finite() {
+            return Err(SproinkError::InvalidValue {
+                field: "sigmoid_center",
+                value: config.sigmoid_center,
+            });
+        }
         if let Some(rho) = config.temporal_decay_rate {
             if !rho.is_finite() || rho < 0.0 {
                 return Err(SproinkError::InvalidValue {
@@ -366,6 +453,17 @@ impl<G: Graph> Engine<G> {
                     value: 0.0,
                 });
             }
+        }
+        if let Some(t) = config.current_time
+            && !t.is_finite()
+        {
+            return Err(SproinkError::InvalidValue {
+                field: "current_time",
+                value: t,
+            });
+        }
+        if let Some(ref inh) = config.inhibition {
+            inh.validate()?;
         }
         Ok(())
     }
@@ -405,6 +503,10 @@ impl<G: Graph> Engine<G> {
     ) {
         let n = self.graph.num_nodes() as usize;
 
+        // Two-phase approach: accumulate positive max and suppression delta
+        // separately, then merge — matching the parallel path semantics.
+        let mut suppress_delta = vec![0.0f64; n];
+
         for i in 0..n {
             if current[i] < config.min_activation {
                 continue;
@@ -437,17 +539,17 @@ impl<G: Graph> Engine<G> {
                     }
                     EdgeKind::Conflicts => {
                         let energy = base_energy / f64::from(counts.conflict);
-                        new[j] = (new[j] - energy).max(0.0);
+                        suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalSuppressive => {
                         let energy = base_energy / f64::from(counts.dir_suppress);
-                        new[j] = (new[j] - energy).max(0.0);
+                        suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalPassive => continue,
                 }
 
                 if distances[i] != u32::MAX {
-                    let candidate = distances[i] + 1;
+                    let candidate = distances[i].saturating_add(1);
                     if candidate < distances[j] {
                         distances[j] = candidate;
                         seed_sources[j] = seed_sources[i];
@@ -474,7 +576,7 @@ impl<G: Graph> Engine<G> {
                             / virtual_count as f64;
                         new[j] = new[j].max(energy);
                         if distances[i] != u32::MAX {
-                            let candidate = distances[i] + 1;
+                            let candidate = distances[i].saturating_add(1);
                             if candidate < distances[j] {
                                 distances[j] = candidate;
                                 seed_sources[j] = seed_sources[i];
@@ -482,6 +584,13 @@ impl<G: Graph> Engine<G> {
                         }
                     }
                 }
+            }
+        }
+
+        // Phase 2: apply accumulated suppression
+        for j in 0..n {
+            if suppress_delta[j] > 0.0 {
+                new[j] = (new[j] - suppress_delta[j]).max(0.0);
             }
         }
     }
@@ -553,7 +662,7 @@ impl<G: Graph> Engine<G> {
                         }
 
                         if distances[i] != u32::MAX {
-                            let candidate = distances[i] + 1;
+                            let candidate = distances[i].saturating_add(1);
                             if candidate < local.min_distance[j] {
                                 local.min_distance[j] = candidate;
                                 local.seed_source[j] = seed_sources[i];
@@ -581,7 +690,7 @@ impl<G: Graph> Engine<G> {
                                         / virtual_count as f64;
                                 local.positive_max[j] = local.positive_max[j].max(energy);
                                 if distances[i] != u32::MAX {
-                                    let candidate = distances[i] + 1;
+                                    let candidate = distances[i].saturating_add(1);
                                     if candidate < local.min_distance[j] {
                                         local.min_distance[j] = candidate;
                                         local.seed_source[j] = seed_sources[i];
@@ -695,9 +804,120 @@ mod tests {
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let results = engine.activate(&[], &config).unwrap();
-        for r in &results {
-            assert!(r.activation.get() < 0.05);
-        }
+        // With the squash-epsilon fix, zero seeds must not be amplified into
+        // the sigmoid baseline (~0.047), so the result set should be empty.
+        assert!(
+            results.is_empty(),
+            "expected empty results, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn max_steps_zero_returns_raw_seeds() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        // Use the default config otherwise — the test verifies that
+        // inhibition/squashing/min_activation pruning are NOT applied when
+        // max_steps == 0, so callers get their raw seed values back.
+        let config = PropagationConfig::builder().max_steps(0).build();
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.42),
+                source: None,
+            },
+            Seed {
+                node: NodeId::new(2),
+                activation: act(0.17),
+                source: None,
+            },
+        ];
+        let results = engine.activate(&seeds, &config).unwrap();
+        assert_eq!(results.len(), 2);
+        let a0 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .unwrap()
+            .activation
+            .get();
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .unwrap()
+            .activation
+            .get();
+        assert!((a0 - 0.42).abs() < 1e-12);
+        assert!((a2 - 0.17).abs() < 1e-12);
+    }
+
+    #[test]
+    fn out_of_bounds_seed_returns_error() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder().build();
+        let seeds = vec![Seed {
+            node: NodeId::new(99),
+            activation: act(1.0),
+            source: None,
+        }];
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        let SproinkError::InvalidValue { field, .. } = err;
+        assert_eq!(field, "seed_node");
+    }
+
+    #[test]
+    fn duplicate_seeds_take_max_activation() {
+        let graph = build_chain(2, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .decay_factor(1.0)
+            .spread_factor(0.01)
+            .min_activation(0.001)
+            .sigmoid_gain(1.0)
+            .sigmoid_center(0.0)
+            .build();
+        // Three duplicate seeds on node 0 — the max (0.9) must win.
+        let seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.2),
+                source: Some(1),
+            },
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.9),
+                source: Some(2),
+            },
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.5),
+                source: Some(3),
+            },
+        ];
+        let results = engine.activate(&seeds, &config).unwrap();
+        let r0 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .expect("node 0 should be present");
+        // First-seen source is preserved across duplicates.
+        assert_eq!(r0.seed_source, Some(1));
+        // A single-seed run at 0.9 should produce the same activation as the
+        // deduplication result — proves the max seed actually won.
+        let single_seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(0.9),
+            source: Some(2),
+        }];
+        let single_results = engine.activate(&single_seeds, &config).unwrap();
+        let s0 = single_results
+            .iter()
+            .find(|r| r.node == NodeId::new(0))
+            .unwrap();
+        assert!(
+            (r0.activation.get() - s0.activation.get()).abs() < 1e-10,
+            "deduped should match single-seed at max"
+        );
     }
 
     #[test]
@@ -1450,6 +1670,69 @@ mod tests {
             source: None,
         }];
         assert!(engine.activate(&seeds, &config).is_err());
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_values() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // decay_factor must be strictly > 0
+        let config = PropagationConfig::builder()
+            .decay_factor(0.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "decay_factor"),
+        }
+
+        // spread_factor must be strictly > 0
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(0.0)
+            .min_activation(0.0)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "spread_factor"),
+        }
+
+        // sigmoid_gain negative inverts the sigmoid and must be rejected
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(-1.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "sigmoid_gain"),
+        }
+
+        // sigmoid_gain zero flattens the sigmoid and must be rejected
+        let config = PropagationConfig::builder()
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.0)
+            .sigmoid_gain(0.0)
+            .sigmoid_center(0.5)
+            .build();
+        let err = engine.activate(&seeds, &config).unwrap_err();
+        match err {
+            SproinkError::InvalidValue { field, .. } => assert_eq!(field, "sigmoid_gain"),
+        }
     }
 
     #[test]

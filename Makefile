@@ -1,10 +1,10 @@
 .PHONY: test lint fmt fmt-check build ci bench coverage clean
 
 test:
-	cargo test
+	cargo test --all-features
 
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 fmt:
 	cargo fmt --all
@@ -19,7 +19,7 @@ bench:
 	cargo bench
 
 coverage:
-	cargo llvm-cov --lcov --output-path lcov.info
+	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
 clean:
 	cargo clean
