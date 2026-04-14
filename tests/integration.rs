@@ -356,7 +356,7 @@ fn hebbian_round_trip() {
 
     let seed_set: HashSet<NodeId> = [NodeId::new(0)].into();
     let hebb_config = HebbianConfig::builder().activation_threshold(0.1).build();
-    let pairs = extract_co_activation_pairs(&results, &seed_set, &hebb_config);
+    let pairs = extract_co_activation_pairs(&results, &seed_set, &hebb_config).unwrap();
 
     // Should have at least some pairs
     assert!(!pairs.is_empty());

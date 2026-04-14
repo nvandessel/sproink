@@ -256,13 +256,14 @@ impl<G: Graph> Engine<G> {
         collect_steps: bool,
     ) -> Result<(Vec<ActivationResult>, Option<Vec<StepSnapshot>>), SproinkError> {
         Self::validate_config(config)?;
-        if let Some((tag_sets, _)) = affinity
-            && tag_sets.len() != self.graph.num_nodes() as usize
-        {
-            return Err(SproinkError::InvalidValue {
-                field: "tag_sets",
-                value: tag_sets.len() as f64,
-            });
+        if let Some((tag_sets, aff_config)) = affinity {
+            aff_config.validate()?;
+            if tag_sets.len() != self.graph.num_nodes() as usize {
+                return Err(SproinkError::InvalidValue {
+                    field: "tag_sets",
+                    value: tag_sets.len() as f64,
+                });
+            }
         }
 
         let n = self.graph.num_nodes() as usize;
@@ -753,6 +754,7 @@ impl<G: Graph> Engine<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::affinity::AffinityConfig;
     use crate::graph::{CsrGraph, EdgeInput, EdgeKind};
     use crate::types::EdgeWeight;
 
@@ -1549,6 +1551,25 @@ mod tests {
                 assert!(a >= 0.5, "Activation {} below min_activation", a);
             }
         }
+    }
+
+    #[test]
+    fn activate_with_affinity_rejects_nan_max_weight() {
+        let graph = build_chain(3, 0.8);
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder().build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+        let tag_sets = vec![vec![], vec![], vec![]];
+        let aff_config = AffinityConfig {
+            max_weight: f64::NAN,
+            min_jaccard: 0.3,
+        };
+        let result = engine.activate_with_affinity(&seeds, &config, &tag_sets, &aff_config);
+        assert!(result.is_err());
     }
 
     // --- Temporal decay ---

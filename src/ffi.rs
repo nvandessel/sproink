@@ -359,7 +359,10 @@ pub unsafe extern "C" fn sproink_extract_pairs(
             .activation_threshold(activation_threshold)
             .build();
 
-        let pairs = extract_co_activation_pairs(&r.results, &seeds, &config);
+        let pairs = match extract_co_activation_pairs(&r.results, &seeds, &config) {
+            Ok(p) => p,
+            Err(_) => return std::ptr::null_mut(),
+        };
         Box::into_raw(Box::new(SproinkPairs { pairs }))
     })) {
         Ok(ptr) => ptr,

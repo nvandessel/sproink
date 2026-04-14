@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use typed_builder::TypedBuilder;
 
+use crate::error::SproinkError;
 use crate::types::{Activation, ActivationResult, EdgeWeight, NodeId};
 
 /// Configuration for Hebbian/Oja learning.
@@ -30,6 +31,43 @@ pub struct HebbianConfig {
 impl Default for HebbianConfig {
     fn default() -> Self {
         Self::builder().build()
+    }
+}
+
+impl HebbianConfig {
+    /// Validates that the config has sane values.
+    pub fn validate(&self) -> Result<(), SproinkError> {
+        if !self.learning_rate.is_finite() || self.learning_rate < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "hebbian_learning_rate",
+                value: self.learning_rate,
+            });
+        }
+        if !self.min_weight.is_finite() || self.min_weight < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "hebbian_min_weight",
+                value: self.min_weight,
+            });
+        }
+        if !self.max_weight.is_finite() || self.max_weight > 1.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "hebbian_max_weight",
+                value: self.max_weight,
+            });
+        }
+        if self.min_weight > self.max_weight {
+            return Err(SproinkError::InvalidValue {
+                field: "hebbian_min_weight",
+                value: self.min_weight,
+            });
+        }
+        if !self.activation_threshold.is_finite() || self.activation_threshold < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "hebbian_activation_threshold",
+                value: self.activation_threshold,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -84,6 +122,7 @@ impl Learner for OjaLearner {
         activation_b: Activation,
         config: &HebbianConfig,
     ) -> EdgeWeight {
+        debug_assert!(config.validate().is_ok());
         let w = current_weight.get();
         let a_i = activation_a.get();
         let a_j = activation_b.get();
@@ -107,12 +146,17 @@ impl Learner for OjaLearner {
 ///
 /// Filters to nodes above `config.activation_threshold`, then returns all
 /// pairs excluding seed-seed combinations. Pairs are canonically ordered.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`SproinkError::InvalidValue`] if the config fails validation.
 pub fn extract_co_activation_pairs(
     results: &[ActivationResult],
     seed_nodes: &HashSet<NodeId>,
     config: &HebbianConfig,
-) -> Vec<CoActivationPair> {
+) -> Result<Vec<CoActivationPair>, SproinkError> {
+    config.validate()?;
+
     // Filter nodes above threshold
     let active: Vec<&ActivationResult> = results
         .iter()
@@ -146,7 +190,7 @@ pub fn extract_co_activation_pairs(
         }
     }
 
-    pairs
+    Ok(pairs)
 }
 
 #[cfg(test)]
@@ -229,7 +273,7 @@ mod tests {
         ];
         let seeds = HashSet::new();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
-        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg).unwrap();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].node_a, NodeId::new(0));
         assert_eq!(pairs[0].node_b, NodeId::new(1));
@@ -259,7 +303,7 @@ mod tests {
         ];
         let seeds: HashSet<NodeId> = [NodeId::new(0), NodeId::new(1)].into();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
-        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg).unwrap();
         assert_eq!(pairs.len(), 2);
         assert!(
             pairs
@@ -286,8 +330,65 @@ mod tests {
         ];
         let seeds = HashSet::new();
         let cfg = HebbianConfig::builder().activation_threshold(0.15).build();
-        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg);
+        let pairs = extract_co_activation_pairs(&results, &seeds, &cfg).unwrap();
         assert_eq!(pairs.len(), 1);
         assert!(pairs[0].node_a < pairs[0].node_b);
+    }
+
+    #[test]
+    fn validate_rejects_nan_learning_rate() {
+        let cfg = HebbianConfig::builder().learning_rate(f64::NAN).build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_negative_learning_rate() {
+        let cfg = HebbianConfig::builder().learning_rate(-0.1).build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_nan_min_weight() {
+        let cfg = HebbianConfig::builder().min_weight(f64::NAN).build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_min_greater_than_max() {
+        let cfg = HebbianConfig::builder()
+            .min_weight(0.9)
+            .max_weight(0.1)
+            .build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_max_weight_above_one() {
+        let cfg = HebbianConfig::builder().max_weight(1.5).build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_nan_activation_threshold() {
+        let cfg = HebbianConfig::builder()
+            .activation_threshold(f64::NAN)
+            .build();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_defaults() {
+        assert!(HebbianConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn extract_pairs_rejects_invalid_config() {
+        let results = vec![];
+        let seeds = HashSet::new();
+        let cfg = HebbianConfig::builder()
+            .min_weight(0.9)
+            .max_weight(0.1)
+            .build();
+        assert!(extract_co_activation_pairs(&results, &seeds, &cfg).is_err());
     }
 }
