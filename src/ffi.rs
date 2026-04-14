@@ -145,12 +145,18 @@ pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
 /// - `graph` must be a valid pointer returned by `sproink_graph_build()`.
 /// - `seed_nodes` and `seed_activations` must point to arrays of at least
 ///   `num_seeds` elements, or be null when `num_seeds == 0`.
+/// - `seed_sources` may be null (all seeds get `source: None`) or must point
+///   to an array of at least `num_seeds` elements. Use `u32::MAX` as the
+///   "no source" sentinel for individual seeds.
+/// - `temporal_decay_rate` and `current_time` use NaN as the "not set"
+///   sentinel, mapping to `None` in the engine config.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_activate(
     graph: *const SproinkGraph,
     num_seeds: u32,
     seed_nodes: *const u32,
     seed_activations: *const f64,
+    seed_sources: *const u32,
     max_steps: u32,
     decay_factor: f64,
     spread_factor: f64,
@@ -160,6 +166,8 @@ pub unsafe extern "C" fn sproink_activate(
     inhibition_enabled: u8,
     inhibition_strength: f64,
     inhibition_breadth: u32,
+    temporal_decay_rate: f64,
+    current_time: f64,
 ) -> *mut SproinkResults {
     if graph.is_null() {
         return std::ptr::null_mut();
@@ -174,16 +182,30 @@ pub unsafe extern "C" fn sproink_activate(
         let graph_ref = unsafe { &(*graph).inner };
         let n = num_seeds as usize;
 
+        let source_slice = if !seed_sources.is_null() && n > 0 {
+            Some(unsafe { std::slice::from_raw_parts(seed_sources, n) })
+        } else {
+            None
+        };
+
         let seeds: Vec<Seed> = if n > 0 {
             let nodes = unsafe { std::slice::from_raw_parts(seed_nodes, n) };
             let acts = unsafe { std::slice::from_raw_parts(seed_activations, n) };
             nodes
                 .iter()
                 .zip(acts.iter())
-                .map(|(&node, &act)| Seed {
-                    node: NodeId::new(node),
-                    activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
-                    source: None,
+                .enumerate()
+                .map(|(i, (&node, &act))| {
+                    let source = source_slice
+                        .and_then(|s| {
+                            let v = s[i];
+                            if v == u32::MAX { None } else { Some(v) }
+                        });
+                    Seed {
+                        node: NodeId::new(node),
+                        activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),
+                        source,
+                    }
                 })
                 .collect()
         } else {
@@ -209,8 +231,16 @@ pub unsafe extern "C" fn sproink_activate(
             sigmoid_gain,
             sigmoid_center,
             inhibition,
-            temporal_decay_rate: None,
-            current_time: None,
+            temporal_decay_rate: if temporal_decay_rate.is_nan() {
+                None
+            } else {
+                Some(temporal_decay_rate)
+            },
+            current_time: if current_time.is_nan() {
+                None
+            } else {
+                Some(current_time)
+            },
         };
 
         let engine = Engine::new(graph_ref);
