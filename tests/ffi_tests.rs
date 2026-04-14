@@ -1,3 +1,5 @@
+#![cfg(feature = "ffi")]
+
 use sproink::ffi::*;
 
 #[test]
@@ -534,6 +536,55 @@ fn activate_with_null_seed_pointer_returns_null() {
             "activate with null seed arrays must return null"
         );
 
+        sproink_graph_free(graph);
+    }
+}
+
+#[test]
+fn extract_pairs_null_seed_pointer_returns_null() {
+    unsafe {
+        // Build graph + activate to get valid results
+        let sources = [0u32, 1];
+        let targets = [1u32, 2];
+        let weights = [0.8f64, 0.8];
+        let kinds = [0u8, 0];
+
+        let graph = sproink_graph_build(
+            3,
+            2,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_activations = [1.0f64];
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_activations.as_ptr(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+        );
+        assert!(!results.is_null());
+
+        let pairs = sproink_extract_pairs(results, 1, std::ptr::null(), 0.1);
+        assert!(
+            pairs.is_null(),
+            "extract_pairs with null seed_nodes must return null"
+        );
+
+        sproink_results_free(results);
         sproink_graph_free(graph);
     }
 }

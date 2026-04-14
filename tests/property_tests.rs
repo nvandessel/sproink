@@ -25,11 +25,11 @@ fn build_random_edges(num_nodes: u32, num_edges: usize) -> Vec<EdgeInput> {
 }
 
 fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
-    CsrGraph::build(num_nodes, build_random_edges(num_nodes, num_edges)).unwrap()
+    CsrGraph::build(num_nodes, &build_random_edges(num_nodes, num_edges)).unwrap()
 }
 
 proptest! {
-    /// All output activations must be in [0.0, 1.0].
+    /// Results must be bounded, unique, sorted, and count-limited.
     #[test]
     fn activation_bounds(
         num_nodes in 2u32..50,
@@ -43,10 +43,31 @@ proptest! {
             .map(|i| Seed {
                 node: NodeId::new((i as u32) % num_nodes),
                 activation: Activation::new(0.8).unwrap(),
-            source: None,
+                source: None,
             })
             .collect();
         let results = engine.activate(&seeds, &config).unwrap();
+
+        // 1. Result count <= num_nodes (no duplicates)
+        prop_assert!(results.len() <= num_nodes as usize,
+            "More results ({}) than nodes ({})", results.len(), num_nodes);
+
+        // 2. No duplicate node IDs
+        let mut seen = std::collections::HashSet::new();
+        for r in &results {
+            prop_assert!(seen.insert(r.node), "Duplicate node {:?}", r.node);
+        }
+
+        // 3. Results are sorted by activation descending, then node ID ascending
+        for w in results.windows(2) {
+            prop_assert!(
+                w[0].activation.get() > w[1].activation.get()
+                || (w[0].activation.get() == w[1].activation.get() && w[0].node < w[1].node),
+                "Results not sorted: {:?} before {:?}", w[0], w[1]
+            );
+        }
+
+        // 4. All activations in [0.0, 1.0]
         for r in &results {
             prop_assert!((0.0..=1.0).contains(&r.activation.get()),
                 "Activation {} out of [0,1]", r.activation.get());
@@ -76,8 +97,8 @@ proptest! {
                 edges2.swap(i, j);
             }
         }
-        let graph1 = CsrGraph::build(num_nodes, edges1).unwrap();
-        let graph2 = CsrGraph::build(num_nodes, edges2).unwrap();
+        let graph1 = CsrGraph::build(num_nodes, &edges1).unwrap();
+        let graph2 = CsrGraph::build(num_nodes, &edges2).unwrap();
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
             node: NodeId::new(0),

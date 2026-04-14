@@ -5,6 +5,7 @@
 
 use typed_builder::TypedBuilder;
 
+use crate::error::SproinkError;
 use crate::graph::{EdgeInput, EdgeKind};
 use crate::types::{EdgeWeight, NodeId, TagId};
 
@@ -33,6 +34,25 @@ pub struct AffinityConfig {
 impl Default for AffinityConfig {
     fn default() -> Self {
         Self::builder().build()
+    }
+}
+
+impl AffinityConfig {
+    /// Validates that the config has sane values.
+    pub fn validate(&self) -> Result<(), SproinkError> {
+        if !self.max_weight.is_finite() || self.max_weight < 0.0 || self.max_weight > 1.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "affinity_max_weight",
+                value: self.max_weight,
+            });
+        }
+        if !self.min_jaccard.is_finite() || self.min_jaccard < 0.0 {
+            return Err(SproinkError::InvalidValue {
+                field: "affinity_min_jaccard",
+                value: self.min_jaccard,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -105,6 +125,9 @@ pub fn jaccard_similarity(a: &[TagId], b: &[TagId]) -> f64 {
 
 impl AffinityGenerator for JaccardAffinity {
     fn generate(&self, node_tags: &[Vec<TagId>], config: &AffinityConfig) -> Vec<EdgeInput> {
+        if config.max_weight.is_nan() {
+            return Vec::new();
+        }
         let mut edges = Vec::new();
         let n = node_tags.len();
 
@@ -261,6 +284,59 @@ mod tests {
         let a = vec![tag(1), tag(1), tag(2)];
         let b = vec![tag(1), tag(2)];
         let _ = jaccard_similarity(&a, &b);
+    }
+
+    #[test]
+    fn validate_rejects_nan_max_weight() {
+        let cfg = AffinityConfig {
+            max_weight: f64::NAN,
+            min_jaccard: 0.3,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_negative_max_weight() {
+        let cfg = AffinityConfig {
+            max_weight: -1.0,
+            min_jaccard: 0.3,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_nan_min_jaccard() {
+        let cfg = AffinityConfig {
+            max_weight: 0.4,
+            min_jaccard: f64::NAN,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_negative_min_jaccard() {
+        let cfg = AffinityConfig {
+            max_weight: 0.4,
+            min_jaccard: -0.1,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_defaults() {
+        assert!(AffinityConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn nan_max_weight_generates_no_edges() {
+        let node_tags = vec![vec![tag(1), tag(2)], vec![tag(1), tag(2)]];
+        let config = AffinityConfig {
+            max_weight: f64::NAN,
+            min_jaccard: 0.0,
+        };
+        let generator = JaccardAffinity;
+        let edges = generator.generate(&node_tags, &config);
+        assert!(edges.is_empty());
     }
 
     #[test]

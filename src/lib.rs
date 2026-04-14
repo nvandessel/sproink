@@ -15,7 +15,7 @@
 //! };
 //!
 //! // Build a simple 3-node chain: 0 → 1 → 2
-//! let graph = CsrGraph::build(3, vec![
+//! let graph = CsrGraph::build(3, &[
 //!     EdgeInput {
 //!         source: NodeId::new(0),
 //!         target: NodeId::new(1),
@@ -49,6 +49,7 @@
 mod affinity;
 mod engine;
 mod error;
+#[cfg(feature = "ffi")]
 pub mod ffi;
 mod graph;
 mod hebbian;
