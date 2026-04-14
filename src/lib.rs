@@ -49,6 +49,7 @@
 mod affinity;
 mod engine;
 mod error;
+#[cfg(feature = "ffi")]
 pub mod ffi;
 mod graph;
 mod hebbian;

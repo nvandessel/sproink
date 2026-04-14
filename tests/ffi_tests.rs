@@ -1,3 +1,5 @@
+#![cfg(feature = "ffi")]
+
 use sproink::ffi::*;
 
 #[test]
