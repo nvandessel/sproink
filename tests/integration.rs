@@ -1129,3 +1129,46 @@ fn activate_with_steps_and_affinity_produces_snapshots() {
         "Affinity should boost node 3: with={a3_with} without={a3_without}"
     );
 }
+
+/// T7: Exercise the NaN/Inf guard in OjaLearner.
+///
+/// With an extremely large learning rate, the Oja update formula can produce
+/// values far outside [0,1] — the guard must clamp or fall back to min_weight
+/// rather than producing NaN or Inf in the result.
+#[test]
+fn oja_guard_with_extreme_learning_rate() {
+    let learner = OjaLearner;
+    let config = HebbianConfig::builder()
+        .learning_rate(f64::MAX)
+        .min_weight(0.05)
+        .max_weight(0.95)
+        .build();
+    assert!(config.validate().is_ok());
+
+    // Case 1: positive overflow — dw is huge positive, result clamped to max_weight
+    let result = learner.update_weight(weight(0.0), act(1.0), act(1.0), &config);
+    assert!(result.get().is_finite(), "must not produce Inf/NaN");
+    assert!(
+        result.get() >= config.min_weight && result.get() <= config.max_weight,
+        "must stay within bounds: got {}",
+        result.get()
+    );
+
+    // Case 2: negative overflow — use w close to 1, a_i near 0, a_j = 1.0 so
+    // dw = η*(0 - 1.0²*w) = -η*w which is huge negative → clamped to min_weight
+    let result = learner.update_weight(weight(0.95), act(0.01), act(1.0), &config);
+    assert!(result.get().is_finite(), "must not produce Inf/NaN");
+    assert_eq!(
+        result.get(),
+        config.min_weight,
+        "negative overflow must clamp to min_weight"
+    );
+
+    // Case 3: repeated updates don't accumulate NaN/Inf
+    let mut w = weight(0.5);
+    for _ in 0..100 {
+        w = learner.update_weight(w, act(0.9), act(0.9), &config);
+        assert!(w.get().is_finite());
+        assert!(w.get() >= config.min_weight && w.get() <= config.max_weight);
+    }
+}
