@@ -4,6 +4,8 @@
 //! implementation, with optional lateral inhibition, sigmoid squashing,
 //! temporal decay, and dynamic affinity.
 
+use std::sync::Mutex;
+
 use rayon::prelude::*;
 use typed_builder::TypedBuilder;
 
@@ -38,6 +40,59 @@ fn count_edge_kinds(neighbors: &[EdgeData]) -> EdgeKindCounts {
         }
     }
     counts
+}
+
+/// Per-thread accumulator for the parallel propagation path.
+///
+/// Pre-allocated before the step loop and reused via a buffer pool to avoid
+/// `O(threads × n)` allocation on every propagation step.
+struct Updates {
+    positive_max: Vec<f64>,
+    suppress_delta: Vec<f64>,
+    min_distance: Vec<u32>,
+    seed_source: Vec<Option<u32>>,
+}
+
+impl Updates {
+    fn new(n: usize) -> Self {
+        Updates {
+            positive_max: vec![0.0f64; n],
+            suppress_delta: vec![0.0f64; n],
+            min_distance: vec![u32::MAX; n],
+            seed_source: vec![None; n],
+        }
+    }
+
+    fn clear(&mut self) {
+        self.positive_max.fill(0.0);
+        self.suppress_delta.fill(0.0);
+        self.min_distance.fill(u32::MAX);
+        self.seed_source.fill(None);
+    }
+}
+
+/// Mutable propagation state passed through each step.
+struct StepState<'a> {
+    new: &'a mut [f64],
+    distances: &'a mut [u32],
+    seed_sources: &'a mut [Option<u32>],
+}
+
+/// Pre-allocated buffers reused across sequential propagation steps.
+struct SeqBuffers {
+    suppress_delta: Vec<f64>,
+    distances_snapshot: Vec<u32>,
+    seed_sources_snapshot: Vec<Option<u32>>,
+}
+
+impl SeqBuffers {
+    fn new(n: usize) -> Self {
+        SeqBuffers {
+            suppress_delta: vec![0.0f64; n],
+            distances_snapshot: vec![0u32; n],
+            seed_sources_snapshot: vec![None; n],
+        }
+    }
 }
 
 const PARALLEL_THRESHOLD: u32 = 1024;
@@ -200,22 +255,22 @@ impl<G: Graph> Engine<G> {
     ///
     /// # Performance
     ///
-    /// Dynamic affinity similarity is recomputed **every propagation step**
-    /// over all node pairs that share tags, so this call scales as
-    /// `O(n² · max_steps)` in the worst case. For large graphs prefer
-    /// materializing [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
-    /// edges ahead of time via [`CsrGraph::build`](crate::CsrGraph::build) and
-    /// using the plain [`activate`](Engine::activate) path.
+    /// Dynamic affinity similarity is computed **once** at the start of the
+    /// activation run over all node pairs that share tags, so this call
+    /// scales as `O(n²)` for the affinity precomputation plus the normal
+    /// per-step propagation cost. For large graphs, prefer materializing
+    /// [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
+    /// edges ahead of time via [`CsrGraph::build`](crate::CsrGraph::build)
+    /// and using the plain [`activate`](Engine::activate) path.
     ///
     /// # Interaction with static affinity edges
     ///
-    /// Dynamic affinity computed from `tag_sets` is **independent** of any
-    /// static [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity)
-    /// edges already present in the graph — if both are supplied, their
-    /// contributions are applied **additively** during propagation. Callers
-    /// who want only one source of affinity should omit the other (either
-    /// pass empty `tag_sets` or rebuild the graph without FeatureAffinity
-    /// edges).
+    /// Dynamic affinity computed from `tag_sets` **skips** node pairs that
+    /// already have a static
+    /// [`EdgeKind::FeatureAffinity`](crate::EdgeKind::FeatureAffinity) edge
+    /// in the graph, avoiding double-counting. Only node pairs *without* an
+    /// existing static affinity edge receive a virtual edge from the tag
+    /// similarity computation.
     pub fn activate_with_affinity(
         &self,
         seeds: &[Seed],
@@ -319,16 +374,28 @@ impl<G: Graph> Engine<G> {
             None
         };
 
+        // I13: Pre-compute virtual affinity edges once instead of every step.
+        // I18: Skip node pairs that already have a static FeatureAffinity edge.
+        let virtual_edges =
+            affinity.map(|(tag_sets, aff_config)| self.compute_virtual_edges(tag_sets, aff_config));
+
+        // I14: Pre-allocate step buffers to avoid per-step allocation.
+        let mut seq_buffers = SeqBuffers::new(n);
+        let buffer_pool: Mutex<Vec<Updates>> = Mutex::new(Vec::new());
+
         for step in 0..config.max_steps {
             next.copy_from_slice(&current);
-            self.propagate_step(
-                &current,
-                &mut next,
-                &mut distance,
-                &mut seed_sources,
-                config,
-                affinity,
-            );
+            let ve = virtual_edges.as_deref();
+            let mut state = StepState {
+                new: &mut next,
+                distances: &mut distance,
+                seed_sources: &mut seed_sources,
+            };
+            if self.graph.num_nodes() < PARALLEL_THRESHOLD {
+                self.propagate_step_sequential(&current, &mut state, config, ve, &mut seq_buffers);
+            } else {
+                self.propagate_step_parallel(&current, &mut state, config, ve, &buffer_pool);
+            }
             std::mem::swap(&mut current, &mut next);
 
             if let Some(ref mut snaps) = snapshots {
@@ -477,41 +544,65 @@ impl<G: Graph> Engine<G> {
         });
     }
 
-    fn propagate_step(
+    /// Pre-computes virtual affinity edges from tag similarity.
+    ///
+    /// Skips node pairs that already have a static [`EdgeKind::FeatureAffinity`]
+    /// edge in the graph to avoid double-counting (I18).
+    fn compute_virtual_edges(
         &self,
-        current: &[f64],
-        new: &mut [f64],
-        distances: &mut [u32],
-        seed_sources: &mut [Option<u32>],
-        config: &PropagationConfig,
-        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
-    ) {
-        if self.graph.num_nodes() < PARALLEL_THRESHOLD {
-            self.propagate_step_sequential(current, new, distances, seed_sources, config, affinity);
-        } else {
-            self.propagate_step_parallel(current, new, distances, seed_sources, config, affinity);
+        tag_sets: &[Vec<TagId>],
+        aff_config: &AffinityConfig,
+    ) -> Vec<Vec<(usize, f64)>> {
+        let n = tag_sets.len();
+        let mut all_edges = Vec::with_capacity(n);
+        for i in 0..n {
+            if tag_sets[i].is_empty() {
+                all_edges.push(Vec::new());
+                continue;
+            }
+            // Collect existing FeatureAffinity targets to avoid double-counting.
+            let static_targets: Vec<usize> = self
+                .graph
+                .neighbors(NodeId::new(i as u32))
+                .iter()
+                .filter(|e| e.kind == EdgeKind::FeatureAffinity)
+                .map(|e| e.target.index())
+                .collect();
+
+            let mut node_edges = Vec::new();
+            for j in 0..n {
+                if j == i || tag_sets[j].is_empty() {
+                    continue;
+                }
+                if static_targets.contains(&j) {
+                    continue;
+                }
+                let sim = jaccard_similarity(&tag_sets[i], &tag_sets[j]);
+                if sim >= aff_config.min_jaccard {
+                    node_edges.push((j, sim * aff_config.max_weight));
+                }
+            }
+            all_edges.push(node_edges);
         }
+        all_edges
     }
 
     fn propagate_step_sequential(
         &self,
         current: &[f64],
-        new: &mut [f64],
-        distances: &mut [u32],
-        seed_sources: &mut [Option<u32>],
+        state: &mut StepState<'_>,
         config: &PropagationConfig,
-        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
+        virtual_edges: Option<&[Vec<(usize, f64)>]>,
+        buffers: &mut SeqBuffers,
     ) {
         let n = self.graph.num_nodes() as usize;
 
-        // Snapshot distances and seed_sources at step start so reads are
-        // consistent within a step — matching the parallel path semantics.
-        let distances_snapshot = distances.to_vec();
-        let seed_sources_snapshot = seed_sources.to_vec();
-
-        // Two-phase approach: accumulate positive max and suppression delta
-        // separately, then merge — matching the parallel path semantics.
-        let mut suppress_delta = vec![0.0f64; n];
+        // Reuse pre-allocated snapshot buffers instead of allocating each step.
+        buffers.distances_snapshot.copy_from_slice(state.distances);
+        buffers
+            .seed_sources_snapshot
+            .copy_from_slice(state.seed_sources);
+        buffers.suppress_delta.fill(0.0);
 
         for i in 0..n {
             if current[i] < config.min_activation {
@@ -537,55 +628,46 @@ impl<G: Graph> Engine<G> {
                 match edge.kind {
                     EdgeKind::Positive => {
                         let energy = base_energy / f64::from(counts.positive);
-                        new[j] = new[j].max(energy);
+                        state.new[j] = state.new[j].max(energy);
                     }
                     EdgeKind::FeatureAffinity => {
                         let energy = base_energy / f64::from(counts.virtual_affinity);
-                        new[j] = new[j].max(energy);
+                        state.new[j] = state.new[j].max(energy);
                     }
                     EdgeKind::Conflicts => {
                         let energy = base_energy / f64::from(counts.conflict);
-                        suppress_delta[j] += energy;
+                        buffers.suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalSuppressive => {
                         let energy = base_energy / f64::from(counts.dir_suppress);
-                        suppress_delta[j] += energy;
+                        buffers.suppress_delta[j] += energy;
                     }
                     EdgeKind::DirectionalPassive => continue,
                 }
 
-                if distances_snapshot[i] != u32::MAX {
-                    let candidate = distances_snapshot[i].saturating_add(1);
-                    if candidate < distances[j] {
-                        distances[j] = candidate;
-                        seed_sources[j] = seed_sources_snapshot[i];
+                if buffers.distances_snapshot[i] != u32::MAX {
+                    let candidate = buffers.distances_snapshot[i].saturating_add(1);
+                    if candidate < state.distances[j] {
+                        state.distances[j] = candidate;
+                        state.seed_sources[j] = buffers.seed_sources_snapshot[i];
                     }
                 }
             }
 
-            // Virtual affinity edges
-            if let Some((tag_sets, aff_config)) = affinity {
-                let mut virtual_edges: Vec<(usize, f64)> = Vec::new();
-                for j in 0..n {
-                    if j == i {
-                        continue;
-                    }
-                    let sim = jaccard_similarity(&tag_sets[i], &tag_sets[j]);
-                    if sim >= aff_config.min_jaccard {
-                        virtual_edges.push((j, sim * aff_config.max_weight));
-                    }
-                }
-                let virtual_count = virtual_edges.len();
+            // Virtual affinity edges (pre-computed, I13)
+            if let Some(ve) = virtual_edges {
+                let node_virtual = &ve[i];
+                let virtual_count = node_virtual.len();
                 if virtual_count > 0 {
-                    for &(j, vw) in &virtual_edges {
+                    for &(j, vw) in node_virtual {
                         let energy = current[i] * config.spread_factor * vw * config.decay_factor
                             / virtual_count as f64;
-                        new[j] = new[j].max(energy);
-                        if distances_snapshot[i] != u32::MAX {
-                            let candidate = distances_snapshot[i].saturating_add(1);
-                            if candidate < distances[j] {
-                                distances[j] = candidate;
-                                seed_sources[j] = seed_sources_snapshot[i];
+                        state.new[j] = state.new[j].max(energy);
+                        if buffers.distances_snapshot[i] != u32::MAX {
+                            let candidate = buffers.distances_snapshot[i].saturating_add(1);
+                            if candidate < state.distances[j] {
+                                state.distances[j] = candidate;
+                                state.seed_sources[j] = buffers.seed_sources_snapshot[i];
                             }
                         }
                     }
@@ -595,8 +677,8 @@ impl<G: Graph> Engine<G> {
 
         // Phase 2: apply accumulated suppression
         for j in 0..n {
-            if suppress_delta[j] > 0.0 {
-                new[j] = (new[j] - suppress_delta[j]).max(0.0);
+            if buffers.suppress_delta[j] > 0.0 {
+                state.new[j] = (state.new[j] - buffers.suppress_delta[j]).max(0.0);
             }
         }
     }
@@ -604,155 +686,146 @@ impl<G: Graph> Engine<G> {
     fn propagate_step_parallel(
         &self,
         current: &[f64],
-        new: &mut [f64],
-        distances: &mut [u32],
-        seed_sources: &mut [Option<u32>],
+        state: &mut StepState<'_>,
         config: &PropagationConfig,
-        affinity: Option<(&[Vec<TagId>], &AffinityConfig)>,
+        virtual_edges: Option<&[Vec<(usize, f64)>]>,
+        buffer_pool: &Mutex<Vec<Updates>>,
     ) {
         let n = self.graph.num_nodes() as usize;
 
-        struct Updates {
-            positive_max: Vec<f64>,
-            suppress_delta: Vec<f64>,
-            min_distance: Vec<u32>,
-            seed_source: Vec<Option<u32>>,
-        }
+        let take_buffer = || {
+            buffer_pool
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pop()
+                .map(|mut u| {
+                    u.clear();
+                    u
+                })
+                .unwrap_or_else(|| Updates::new(n))
+        };
+
+        let return_buffer = |buf: Updates| {
+            buffer_pool
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(buf);
+        };
 
         let merged = (0..n)
             .into_par_iter()
             .filter(|&i| current[i] >= config.min_activation)
-            .fold(
-                || Updates {
-                    positive_max: vec![0.0f64; n],
-                    suppress_delta: vec![0.0f64; n],
-                    min_distance: vec![u32::MAX; n],
-                    seed_source: vec![None; n],
-                },
-                |mut local, i| {
-                    let neighbors = self.graph.neighbors(NodeId::new(i as u32));
-                    let counts = count_edge_kinds(neighbors);
+            .fold(take_buffer, |mut local, i| {
+                let neighbors = self.graph.neighbors(NodeId::new(i as u32));
+                let counts = count_edge_kinds(neighbors);
 
-                    for edge in neighbors {
-                        let w = match config.temporal_decay_rate {
-                            Some(rho) => temporal_weight(
-                                edge.weight.get(),
-                                edge.last_activated,
-                                rho,
-                                config.current_time.unwrap(),
-                            ),
-                            None => edge.weight.get(),
-                        };
-                        let base_energy =
-                            current[i] * config.spread_factor * w * config.decay_factor;
-                        let j = edge.target.index();
+                for edge in neighbors {
+                    let w = match config.temporal_decay_rate {
+                        Some(rho) => temporal_weight(
+                            edge.weight.get(),
+                            edge.last_activated,
+                            rho,
+                            config.current_time.unwrap(),
+                        ),
+                        None => edge.weight.get(),
+                    };
+                    let base_energy = current[i] * config.spread_factor * w * config.decay_factor;
+                    let j = edge.target.index();
 
-                        match edge.kind {
-                            EdgeKind::Positive => {
-                                let energy = base_energy / f64::from(counts.positive);
-                                local.positive_max[j] = local.positive_max[j].max(energy);
-                            }
-                            EdgeKind::FeatureAffinity => {
-                                let energy = base_energy / f64::from(counts.virtual_affinity);
-                                local.positive_max[j] = local.positive_max[j].max(energy);
-                            }
-                            EdgeKind::Conflicts => {
-                                let energy = base_energy / f64::from(counts.conflict);
-                                local.suppress_delta[j] += energy;
-                            }
-                            EdgeKind::DirectionalSuppressive => {
-                                let energy = base_energy / f64::from(counts.dir_suppress);
-                                local.suppress_delta[j] += energy;
-                            }
-                            EdgeKind::DirectionalPassive => continue,
+                    match edge.kind {
+                        EdgeKind::Positive => {
+                            let energy = base_energy / f64::from(counts.positive);
+                            local.positive_max[j] = local.positive_max[j].max(energy);
                         }
-
-                        if distances[i] != u32::MAX {
-                            let candidate = distances[i].saturating_add(1);
-                            if candidate < local.min_distance[j] {
-                                local.min_distance[j] = candidate;
-                                local.seed_source[j] = seed_sources[i];
-                            }
+                        EdgeKind::FeatureAffinity => {
+                            let energy = base_energy / f64::from(counts.virtual_affinity);
+                            local.positive_max[j] = local.positive_max[j].max(energy);
                         }
+                        EdgeKind::Conflicts => {
+                            let energy = base_energy / f64::from(counts.conflict);
+                            local.suppress_delta[j] += energy;
+                        }
+                        EdgeKind::DirectionalSuppressive => {
+                            let energy = base_energy / f64::from(counts.dir_suppress);
+                            local.suppress_delta[j] += energy;
+                        }
+                        EdgeKind::DirectionalPassive => continue,
                     }
 
-                    // Virtual affinity edges
-                    if let Some((tag_sets, aff_config)) = affinity {
-                        let mut virtual_edges: Vec<(usize, f64)> = Vec::new();
-                        for j in 0..n {
-                            if j == i {
-                                continue;
-                            }
-                            let sim = jaccard_similarity(&tag_sets[i], &tag_sets[j]);
-                            if sim >= aff_config.min_jaccard {
-                                virtual_edges.push((j, sim * aff_config.max_weight));
-                            }
+                    if state.distances[i] != u32::MAX {
+                        let candidate = state.distances[i].saturating_add(1);
+                        if candidate < local.min_distance[j] {
+                            local.min_distance[j] = candidate;
+                            local.seed_source[j] = state.seed_sources[i];
                         }
-                        let virtual_count = virtual_edges.len();
-                        if virtual_count > 0 {
-                            for &(j, vw) in &virtual_edges {
-                                let energy =
-                                    current[i] * config.spread_factor * vw * config.decay_factor
-                                        / virtual_count as f64;
-                                local.positive_max[j] = local.positive_max[j].max(energy);
-                                if distances[i] != u32::MAX {
-                                    let candidate = distances[i].saturating_add(1);
-                                    if candidate < local.min_distance[j] {
-                                        local.min_distance[j] = candidate;
-                                        local.seed_source[j] = seed_sources[i];
-                                    }
+                    }
+                }
+
+                // Virtual affinity edges (pre-computed, I13)
+                if let Some(ve) = virtual_edges {
+                    let node_virtual = &ve[i];
+                    let virtual_count = node_virtual.len();
+                    if virtual_count > 0 {
+                        for &(j, vw) in node_virtual {
+                            let energy =
+                                current[i] * config.spread_factor * vw * config.decay_factor
+                                    / virtual_count as f64;
+                            local.positive_max[j] = local.positive_max[j].max(energy);
+                            if state.distances[i] != u32::MAX {
+                                let candidate = state.distances[i].saturating_add(1);
+                                if candidate < local.min_distance[j] {
+                                    local.min_distance[j] = candidate;
+                                    local.seed_source[j] = state.seed_sources[i];
                                 }
                             }
                         }
                     }
+                }
 
-                    local
-                },
-            )
-            .reduce(
-                || Updates {
-                    positive_max: vec![0.0f64; n],
-                    suppress_delta: vec![0.0f64; n],
-                    min_distance: vec![u32::MAX; n],
-                    seed_source: vec![None; n],
-                },
-                |mut a, b| {
-                    for j in 0..n {
-                        a.positive_max[j] = a.positive_max[j].max(b.positive_max[j]);
-                        a.suppress_delta[j] += b.suppress_delta[j];
-                        if b.min_distance[j] < a.min_distance[j] {
-                            a.min_distance[j] = b.min_distance[j];
-                            a.seed_source[j] = b.seed_source[j];
-                        } else if b.min_distance[j] == a.min_distance[j] {
-                            // Tie-breaking: named sources win over unnamed (Some > None);
-                            // when both are named, lower ID wins.
-                            a.seed_source[j] = match (a.seed_source[j], b.seed_source[j]) {
-                                (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
-                                (Some(_), None) => a.seed_source[j],
-                                (None, Some(_)) => b.seed_source[j],
-                                (None, None) => None,
-                            };
-                        }
+                local
+            })
+            .reduce(take_buffer, |mut a, b| {
+                for j in 0..n {
+                    a.positive_max[j] = a.positive_max[j].max(b.positive_max[j]);
+                    a.suppress_delta[j] += b.suppress_delta[j];
+                    if b.min_distance[j] < a.min_distance[j] {
+                        a.min_distance[j] = b.min_distance[j];
+                        a.seed_source[j] = b.seed_source[j];
+                    } else if b.min_distance[j] == a.min_distance[j] {
+                        // Tie-breaking: named sources win over unnamed (Some > None);
+                        // when both are named, lower ID wins.
+                        a.seed_source[j] = match (a.seed_source[j], b.seed_source[j]) {
+                            (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
+                            (Some(_), None) => a.seed_source[j],
+                            (None, Some(_)) => b.seed_source[j],
+                            (None, None) => None,
+                        };
                     }
-                    a
-                },
-            );
+                }
+                // Return b to pool for reuse in subsequent steps.
+                return_buffer(b);
+                a
+            });
 
         for j in 0..n {
-            new[j] = new[j].max(merged.positive_max[j]);
-            new[j] = (new[j] - merged.suppress_delta[j]).max(0.0);
-            if merged.min_distance[j] < distances[j] {
-                distances[j] = merged.min_distance[j];
-                seed_sources[j] = merged.seed_source[j];
-            } else if merged.min_distance[j] == distances[j] && distances[j] != u32::MAX {
-                seed_sources[j] = match (seed_sources[j], merged.seed_source[j]) {
+            state.new[j] = state.new[j].max(merged.positive_max[j]);
+            state.new[j] = (state.new[j] - merged.suppress_delta[j]).max(0.0);
+            if merged.min_distance[j] < state.distances[j] {
+                state.distances[j] = merged.min_distance[j];
+                state.seed_sources[j] = merged.seed_source[j];
+            } else if merged.min_distance[j] == state.distances[j] && state.distances[j] != u32::MAX
+            {
+                state.seed_sources[j] = match (state.seed_sources[j], merged.seed_source[j]) {
                     (Some(a_id), Some(b_id)) => Some(a_id.min(b_id)),
-                    (Some(_), None) => seed_sources[j],
+                    (Some(_), None) => state.seed_sources[j],
                     (None, Some(_)) => merged.seed_source[j],
                     (None, None) => None,
                 };
             }
         }
+
+        // Return merged buffer to pool for reuse in subsequent steps.
+        return_buffer(merged);
     }
 }
 
@@ -2068,5 +2141,117 @@ mod tests {
                 results[i].activation.get()
             );
         }
+    }
+
+    #[test]
+    fn virtual_affinity_dedup_does_not_inflate_denominator() {
+        // Static FeatureAffinity edge 0<->1 (weight 0.8).
+        // Nodes 0, 1, 2 all share identical tags.
+        // BUG: virtual edges computed for node 0 include both 1 and 2,
+        //   so virtual_count=2 and node 2's energy is halved.
+        // FIX: virtual edge to 1 is skipped (static FeatureAffinity exists),
+        //   so virtual_count=1 and node 2 gets full energy.
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.8),
+            kind: EdgeKind::FeatureAffinity,
+            last_activated: None,
+        }];
+        let graph = CsrGraph::build(3, &edges).unwrap();
+        let engine = Engine::new(&graph);
+        let config = PropagationConfig::builder()
+            .max_steps(1)
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.001)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.3)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        let tag_sets = vec![
+            vec![TagId::new(1), TagId::new(2)],
+            vec![TagId::new(1), TagId::new(2)],
+            vec![TagId::new(1), TagId::new(2)],
+        ];
+        let aff_config = AffinityConfig::builder()
+            .min_jaccard(0.3)
+            .max_weight(0.5)
+            .build();
+
+        let results = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+
+        // With fix (virtual_count=1): pre-squash energy to node 2 = 0.5
+        // Without fix (virtual_count=2): pre-squash energy to node 2 = 0.25
+        // squash(0.5, 10, 0.3) ≈ 0.88; squash(0.25, 10, 0.3) ≈ 0.38
+        assert!(
+            a2 > 0.5,
+            "Node 2 activation should reflect undiluted virtual edge \
+             (expected >0.5, got {a2}). Virtual affinity denominator \
+             may be inflated by duplicate edge to node 1."
+        );
+    }
+
+    #[test]
+    fn virtual_affinity_still_creates_edges_without_static_overlap() {
+        // Static FeatureAffinity edge between 0 and 1 only
+        let edges = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::FeatureAffinity,
+            last_activated: None,
+        }];
+        let graph = CsrGraph::build(3, &edges).unwrap();
+        let engine = Engine::new(&graph);
+        let config = PropagationConfig::builder()
+            .max_steps(2)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: None,
+        }];
+
+        // Nodes 0 and 2 share tags (no static edge -> virtual edge created)
+        // Nodes 0 and 1 share tags (static edge exists -> virtual edge skipped)
+        let tag_sets = vec![
+            vec![TagId::new(1), TagId::new(2), TagId::new(3)],
+            vec![TagId::new(1), TagId::new(2), TagId::new(3)],
+            vec![TagId::new(1), TagId::new(2), TagId::new(3)],
+        ];
+        let aff_config = AffinityConfig::builder()
+            .min_jaccard(0.3)
+            .max_weight(0.5)
+            .build();
+
+        let results = engine
+            .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+            .unwrap();
+
+        // Node 2 should have activation via virtual edge from node 0
+        let a2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+        assert!(
+            a2 > 0.001,
+            "Node 2 should be active via virtual edge, got {a2}"
+        );
     }
 }
