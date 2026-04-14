@@ -344,6 +344,9 @@ pub unsafe extern "C" fn sproink_extract_pairs(
     if results.is_null() {
         return std::ptr::null_mut();
     }
+    if num_seeds > 0 && seed_nodes.is_null() {
+        return std::ptr::null_mut();
+    }
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = unsafe { &*results };
