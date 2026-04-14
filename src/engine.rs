@@ -504,6 +504,11 @@ impl<G: Graph> Engine<G> {
     ) {
         let n = self.graph.num_nodes() as usize;
 
+        // Snapshot distances and seed_sources at step start so reads are
+        // consistent within a step — matching the parallel path semantics.
+        let distances_snapshot = distances.to_vec();
+        let seed_sources_snapshot = seed_sources.to_vec();
+
         // Two-phase approach: accumulate positive max and suppression delta
         // separately, then merge — matching the parallel path semantics.
         let mut suppress_delta = vec![0.0f64; n];
@@ -549,11 +554,11 @@ impl<G: Graph> Engine<G> {
                     EdgeKind::DirectionalPassive => continue,
                 }
 
-                if distances[i] != u32::MAX {
-                    let candidate = distances[i].saturating_add(1);
+                if distances_snapshot[i] != u32::MAX {
+                    let candidate = distances_snapshot[i].saturating_add(1);
                     if candidate < distances[j] {
                         distances[j] = candidate;
-                        seed_sources[j] = seed_sources[i];
+                        seed_sources[j] = seed_sources_snapshot[i];
                     }
                 }
             }
@@ -576,11 +581,11 @@ impl<G: Graph> Engine<G> {
                         let energy = current[i] * config.spread_factor * vw * config.decay_factor
                             / virtual_count as f64;
                         new[j] = new[j].max(energy);
-                        if distances[i] != u32::MAX {
-                            let candidate = distances[i].saturating_add(1);
+                        if distances_snapshot[i] != u32::MAX {
+                            let candidate = distances_snapshot[i].saturating_add(1);
                             if candidate < distances[j] {
                                 distances[j] = candidate;
-                                seed_sources[j] = seed_sources[i];
+                                seed_sources[j] = seed_sources_snapshot[i];
                             }
                         }
                     }
@@ -1549,6 +1554,59 @@ mod tests {
         for snap in &snapshots[1..snapshots.len() - 1] {
             for &(_, a) in &snap.activations {
                 assert!(a >= 0.5, "Activation {} below min_activation", a);
+            }
+        }
+    }
+
+    #[test]
+    fn distance_tracking_matches_sequential_and_parallel() {
+        // Build a chain just below PARALLEL_THRESHOLD (sequential path)
+        let small_n = 100u32;
+        let mut small_edges: Vec<EdgeInput> = (0..small_n - 1)
+            .map(|i| EdgeInput {
+                source: NodeId::new(i),
+                target: NodeId::new(i + 1),
+                weight: weight(0.8),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            })
+            .collect();
+        // Add a cross-edge to make distance tracking non-trivial
+        small_edges.push(EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(50),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        });
+        let small_graph = CsrGraph::build(small_n, small_edges.clone()).unwrap();
+
+        // Build the same graph padded to above PARALLEL_THRESHOLD
+        let large_n = 1100u32;
+        // Pad edges for the extra isolated nodes (no edges needed, they're just padding)
+        let large_graph = CsrGraph::build(large_n, small_edges).unwrap();
+
+        let config = PropagationConfig::builder()
+            .max_steps(5)
+            .min_activation(0.001)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(42),
+        }];
+
+        let small_results = Engine::new(small_graph).activate(&seeds, &config).unwrap();
+        let large_results = Engine::new(large_graph).activate(&seeds, &config).unwrap();
+
+        // Compare distances for shared nodes
+        for sr in &small_results {
+            if let Some(lr) = large_results.iter().find(|r| r.node == sr.node) {
+                assert_eq!(
+                    sr.distance, lr.distance,
+                    "Distance mismatch for node {:?}: seq={} par={}",
+                    sr.node, sr.distance, lr.distance
+                );
             }
         }
     }
