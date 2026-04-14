@@ -40,7 +40,7 @@ impl Default for AffinityConfig {
 impl AffinityConfig {
     /// Validates that the config has sane values.
     pub fn validate(&self) -> Result<(), SproinkError> {
-        if !self.max_weight.is_finite() || self.max_weight < 0.0 {
+        if !self.max_weight.is_finite() || self.max_weight < 0.0 || self.max_weight > 1.0 {
             return Err(SproinkError::InvalidValue {
                 field: "affinity_max_weight",
                 value: self.max_weight,
