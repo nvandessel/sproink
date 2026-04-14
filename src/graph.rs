@@ -13,7 +13,7 @@ use crate::types::{EdgeWeight, NodeId};
 /// Edge kinds determine how activation energy is propagated or suppressed
 /// during spreading activation.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EdgeKind {
     /// Standard excitatory edge — energy flows and accumulates via max.
@@ -41,7 +41,12 @@ impl fmt::Display for EdgeKind {
 }
 
 impl EdgeKind {
-    fn reverse(self) -> Self {
+    /// Returns the reverse edge kind for bidirectional storage.
+    ///
+    /// [`DirectionalSuppressive`](EdgeKind::DirectionalSuppressive) reverses to
+    /// [`DirectionalPassive`](EdgeKind::DirectionalPassive); all other kinds are
+    /// symmetric and reverse to themselves.
+    pub fn reverse(self) -> Self {
         match self {
             EdgeKind::DirectionalSuppressive => EdgeKind::DirectionalPassive,
             other => other,
@@ -50,7 +55,7 @@ impl EdgeKind {
 }
 
 /// A stored edge in the CSR graph (target endpoint only; source is implicit).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeData {
     /// The neighbor node this edge points to.
@@ -66,7 +71,7 @@ pub struct EdgeData {
 /// An edge to insert when building a graph.
 ///
 /// Each `EdgeInput` produces two stored edges (forward and reverse).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeInput {
     /// Source node of the edge.
@@ -430,5 +435,81 @@ mod tests {
             last_activated: None,
         }];
         assert!(CsrGraph::build(2, &edges).is_err());
+    }
+
+    #[test]
+    fn edge_kind_reverse_is_public() {
+        // I26: EdgeKind::reverse() must be accessible from outside the module.
+        assert_eq!(
+            EdgeKind::DirectionalSuppressive.reverse(),
+            EdgeKind::DirectionalPassive
+        );
+        assert_eq!(EdgeKind::Positive.reverse(), EdgeKind::Positive);
+        assert_eq!(EdgeKind::Conflicts.reverse(), EdgeKind::Conflicts);
+        assert_eq!(
+            EdgeKind::FeatureAffinity.reverse(),
+            EdgeKind::FeatureAffinity
+        );
+    }
+
+    #[test]
+    fn edge_data_supports_partial_eq() {
+        let a = EdgeData {
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        let b = EdgeData {
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        let c = EdgeData {
+            target: NodeId::new(2),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn edge_input_supports_partial_eq() {
+        let a = EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        let b = EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        let c = EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(2),
+            weight: weight(0.5),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn edge_kind_supports_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(EdgeKind::Positive);
+        set.insert(EdgeKind::Conflicts);
+        set.insert(EdgeKind::Positive); // duplicate
+        assert_eq!(set.len(), 2);
     }
 }
