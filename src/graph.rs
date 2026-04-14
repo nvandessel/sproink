@@ -98,7 +98,7 @@ pub trait Graph: Send + Sync {
 /// ```
 /// use sproink::{CsrGraph, EdgeInput, EdgeKind, EdgeWeight, Graph, NodeId};
 ///
-/// let graph = CsrGraph::build(2, vec![EdgeInput {
+/// let graph = CsrGraph::build(2, &[EdgeInput {
 ///     source: NodeId::new(0),
 ///     target: NodeId::new(1),
 ///     weight: EdgeWeight::new(0.5).unwrap(),
@@ -152,9 +152,9 @@ impl CsrGraph {
     ///   [`EdgeKind::DirectionalSuppressive`] and must not be supplied by
     ///   the caller;
     /// - the total edge count would overflow `u32`.
-    pub fn build(num_nodes: u32, inputs: Vec<EdgeInput>) -> Result<Self, SproinkError> {
+    pub fn build(num_nodes: u32, inputs: &[EdgeInput]) -> Result<Self, SproinkError> {
         // Validate node IDs and reject user-supplied DirectionalPassive edges.
-        for e in &inputs {
+        for e in inputs {
             if e.source.index() >= num_nodes as usize {
                 return Err(SproinkError::InvalidValue {
                     field: "edge_source",
@@ -178,7 +178,7 @@ impl CsrGraph {
 
         // Count edges per node (each input produces 2 stored edges)
         let mut counts = vec![0u32; num_nodes as usize];
-        for e in &inputs {
+        for e in inputs {
             counts[e.source.index()] += 1;
             counts[e.target.index()] += 1;
         }
@@ -210,7 +210,7 @@ impl CsrGraph {
             })
             .collect();
 
-        for e in &inputs {
+        for e in inputs {
             // Forward edge: source -> target
             let pos = write_pos[e.source.index()] as usize;
             edges[pos] = EdgeData {
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn empty_graph() {
-        let g = CsrGraph::build(5, vec![]).unwrap();
+        let g = CsrGraph::build(5, &[]).unwrap();
         assert_eq!(g.num_nodes(), 5);
         for i in 0..5 {
             assert!(g.neighbors(NodeId::new(i)).is_empty());
@@ -288,7 +288,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges).unwrap();
+        let g = CsrGraph::build(2, &edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 1);
         assert_eq!(n0[0].target, NodeId::new(1));
@@ -308,7 +308,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges).unwrap();
+        let g = CsrGraph::build(2, &edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0[0].kind, EdgeKind::DirectionalSuppressive);
         let n1 = g.neighbors(NodeId::new(1));
@@ -324,7 +324,7 @@ mod tests {
             kind: EdgeKind::Conflicts,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges).unwrap();
+        let g = CsrGraph::build(2, &edges).unwrap();
         assert_eq!(g.neighbors(NodeId::new(0))[0].kind, EdgeKind::Conflicts);
         assert_eq!(g.neighbors(NodeId::new(1))[0].kind, EdgeKind::Conflicts);
     }
@@ -338,7 +338,7 @@ mod tests {
             kind: EdgeKind::FeatureAffinity,
             last_activated: None,
         }];
-        let g = CsrGraph::build(2, edges).unwrap();
+        let g = CsrGraph::build(2, &edges).unwrap();
         assert_eq!(
             g.neighbors(NodeId::new(0))[0].kind,
             EdgeKind::FeatureAffinity
@@ -367,7 +367,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let g = CsrGraph::build(3, edges).unwrap();
+        let g = CsrGraph::build(3, &edges).unwrap();
         assert_eq!(g.neighbors(NodeId::new(0)).len(), 2);
         assert_eq!(g.neighbors(NodeId::new(1)).len(), 1);
         assert_eq!(g.neighbors(NodeId::new(2)).len(), 1);
@@ -382,7 +382,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let g = CsrGraph::build(1, edges).unwrap();
+        let g = CsrGraph::build(1, &edges).unwrap();
         let n0 = g.neighbors(NodeId::new(0));
         assert_eq!(n0.len(), 2);
         assert!(n0.iter().all(|e| e.target == NodeId::new(0)));
@@ -403,7 +403,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        assert!(CsrGraph::build(2, edges).is_err());
+        assert!(CsrGraph::build(2, &edges).is_err());
     }
 
     #[test]
@@ -415,7 +415,7 @@ mod tests {
             kind: EdgeKind::DirectionalPassive,
             last_activated: None,
         }];
-        let err = CsrGraph::build(2, edges).unwrap_err();
+        let err = CsrGraph::build(2, &edges).unwrap_err();
         let SproinkError::InvalidValue { field, .. } = err;
         assert_eq!(field, "edge_kind");
     }
@@ -429,6 +429,6 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        assert!(CsrGraph::build(2, edges).is_err());
+        assert!(CsrGraph::build(2, &edges).is_err());
     }
 }

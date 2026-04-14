@@ -25,7 +25,7 @@ fn build_random_edges(num_nodes: u32, num_edges: usize) -> Vec<EdgeInput> {
 }
 
 fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
-    CsrGraph::build(num_nodes, build_random_edges(num_nodes, num_edges)).unwrap()
+    CsrGraph::build(num_nodes, &build_random_edges(num_nodes, num_edges)).unwrap()
 }
 
 proptest! {
@@ -76,8 +76,8 @@ proptest! {
                 edges2.swap(i, j);
             }
         }
-        let graph1 = CsrGraph::build(num_nodes, edges1).unwrap();
-        let graph2 = CsrGraph::build(num_nodes, edges2).unwrap();
+        let graph1 = CsrGraph::build(num_nodes, &edges1).unwrap();
+        let graph2 = CsrGraph::build(num_nodes, &edges2).unwrap();
         let config = PropagationConfig::builder().build();
         let seeds = vec![Seed {
             node: NodeId::new(0),

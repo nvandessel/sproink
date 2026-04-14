@@ -152,7 +152,7 @@ impl<G: Graph> Engine<G> {
     ///     Engine, NodeId, PropagationConfig, Seed,
     /// };
     ///
-    /// let graph = CsrGraph::build(2, vec![EdgeInput {
+    /// let graph = CsrGraph::build(2, &[EdgeInput {
     ///     source: NodeId::new(0),
     ///     target: NodeId::new(1),
     ///     weight: EdgeWeight::new(0.8).unwrap(),
@@ -780,7 +780,7 @@ mod tests {
                 last_activated: None,
             })
             .collect();
-        CsrGraph::build(n, edges).unwrap()
+        CsrGraph::build(n, &edges).unwrap()
     }
 
     #[test]
@@ -974,7 +974,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1016,7 +1016,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1068,7 +1068,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1123,7 +1123,7 @@ mod tests {
                 last_activated: None,
             })
             .collect();
-        let graph = CsrGraph::build(n, edges).unwrap();
+        let graph = CsrGraph::build(n, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().max_steps(1).build();
         let seeds = vec![Seed {
@@ -1178,7 +1178,7 @@ mod tests {
             kind: EdgeKind::DirectionalSuppressive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(2, edges).unwrap();
+        let graph = CsrGraph::build(2, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1285,7 +1285,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(5, edges).unwrap();
+        let graph = CsrGraph::build(5, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1318,7 +1318,7 @@ mod tests {
                 }
             }
         }
-        CsrGraph::build(num_nodes, edges).unwrap()
+        CsrGraph::build(num_nodes, &edges).unwrap()
     }
 
     #[test]
@@ -1579,12 +1579,12 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         });
-        let small_graph = CsrGraph::build(small_n, small_edges.clone()).unwrap();
+        let small_graph = CsrGraph::build(small_n, &small_edges).unwrap();
 
         // Build the same graph padded to above PARALLEL_THRESHOLD
         let large_n = 1100u32;
         // Pad edges for the extra isolated nodes (no edges needed, they're just padding)
-        let large_graph = CsrGraph::build(large_n, small_edges).unwrap();
+        let large_graph = CsrGraph::build(large_n, &small_edges).unwrap();
 
         let config = PropagationConfig::builder()
             .max_steps(5)
@@ -1668,7 +1668,7 @@ mod tests {
                 last_activated: Some(0.0), // old: 100h ago
             },
         ];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1852,7 +1852,7 @@ mod tests {
                 last_activated: None,
             },
         ];
-        let graph = CsrGraph::build(4, edges).unwrap();
+        let graph = CsrGraph::build(4, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(3)
@@ -1912,7 +1912,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(1)
@@ -1996,7 +1996,7 @@ mod tests {
             kind: EdgeKind::Positive,
             last_activated: None,
         }];
-        let graph = CsrGraph::build(3, edges).unwrap();
+        let graph = CsrGraph::build(3, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder()
             .max_steps(2)
