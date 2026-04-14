@@ -6,30 +6,25 @@ use sproink::*;
 
 use common::build_chain;
 
-fn edge_strategy(
-    num_nodes: u32,
-) -> impl Strategy<Value = EdgeInput> {
+fn edge_strategy(num_nodes: u32) -> impl Strategy<Value = EdgeInput> {
     let kinds = prop::sample::select(vec![
         EdgeKind::Positive,
         EdgeKind::Conflicts,
         EdgeKind::DirectionalSuppressive,
         EdgeKind::FeatureAffinity,
     ]);
-    (0..num_nodes, 0..num_nodes, kinds).prop_filter_map(
-        "source != target",
-        |(s, t, kind)| {
-            if s == t {
-                return None;
-            }
-            Some(EdgeInput {
-                source: NodeId::new(s),
-                target: NodeId::new(t),
-                weight: EdgeWeight::new(0.5).unwrap(),
-                kind,
-                last_activated: None,
-            })
-        },
-    )
+    (0..num_nodes, 0..num_nodes, kinds).prop_filter_map("source != target", |(s, t, kind)| {
+        if s == t {
+            return None;
+        }
+        Some(EdgeInput {
+            source: NodeId::new(s),
+            target: NodeId::new(t),
+            weight: EdgeWeight::new(0.5).unwrap(),
+            kind,
+            last_activated: None,
+        })
+    })
 }
 
 fn random_edges_strategy(

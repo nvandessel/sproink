@@ -196,11 +196,10 @@ pub unsafe extern "C" fn sproink_activate(
                 .zip(acts.iter())
                 .enumerate()
                 .map(|(i, (&node, &act))| {
-                    let source = source_slice
-                        .and_then(|s| {
-                            let v = s[i];
-                            if v == u32::MAX { None } else { Some(v) }
-                        });
+                    let source = source_slice.and_then(|s| {
+                        let v = s[i];
+                        if v == u32::MAX { None } else { Some(v) }
+                    });
                     Seed {
                         node: NodeId::new(node),
                         activation: Activation::new_unchecked(act.clamp(0.0, 1.0)),

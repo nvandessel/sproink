@@ -649,9 +649,9 @@ fn inhibition_breadth_zero_returns_null() {
             0.01,
             10.0,
             0.3,
-            1,    // inhibition_enabled = true
-            0.15, // inhibition_strength
-            0,    // inhibition_breadth = 0 → rejected
+            1,        // inhibition_enabled = true
+            0.15,     // inhibition_strength
+            0,        // inhibition_breadth = 0 → rejected
             f64::NAN, // temporal_decay_rate = not set
             f64::NAN, // current_time = not set
         );
