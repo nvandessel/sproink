@@ -1004,7 +1004,44 @@ mod tests {
                 .map(|r| r.activation.get())
                 .unwrap_or(0.0)
         };
-        assert!(a(1) > a(2) || (a(2) - a(1)).abs() < 0.01);
+
+        // Baseline: same graph without the conflict edge
+        let positive_only = vec![EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(1.0),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        }];
+        let baseline_graph = CsrGraph::build(3, &positive_only).unwrap();
+        let baseline_seeds = vec![
+            Seed {
+                node: NodeId::new(0),
+                activation: act(0.8),
+                source: None,
+            },
+            Seed {
+                node: NodeId::new(2),
+                activation: act(0.8),
+                source: None,
+            },
+        ];
+        let baseline = Engine::new(baseline_graph)
+            .activate(&baseline_seeds, &config)
+            .unwrap();
+        let baseline_a2 = baseline
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .map(|r| r.activation.get())
+            .unwrap_or(0.0);
+
+        // Node 2 with conflict edge should have LESS activation than without
+        assert!(
+            a(2) < baseline_a2,
+            "conflict edge should suppress node 2: got {} vs baseline {}",
+            a(2),
+            baseline_a2
+        );
     }
 
     #[test]

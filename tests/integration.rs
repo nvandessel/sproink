@@ -1029,3 +1029,103 @@ fn parallel_temporal_decay() {
         assert!((0.0..=1.0).contains(&r.activation.get()));
     }
 }
+
+/// Exercises `activate_with_steps_and_affinity` end-to-end.
+/// Verifies snapshot structure and that affinity edges influence propagation.
+#[test]
+fn activate_with_steps_and_affinity_produces_snapshots() {
+    let edges = vec![
+        EdgeInput {
+            source: NodeId::new(0),
+            target: NodeId::new(1),
+            weight: weight(0.8),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+        EdgeInput {
+            source: NodeId::new(1),
+            target: NodeId::new(2),
+            weight: weight(0.6),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+        EdgeInput {
+            source: NodeId::new(2),
+            target: NodeId::new(3),
+            weight: weight(0.4),
+            kind: EdgeKind::Positive,
+            last_activated: None,
+        },
+    ];
+    let graph = CsrGraph::build(4, &edges).unwrap();
+    let engine = Engine::new(graph);
+
+    let max_steps = 3u32;
+    let config = PropagationConfig::builder()
+        .max_steps(max_steps)
+        .min_activation(0.001)
+        .build();
+    let seeds = vec![Seed {
+        node: NodeId::new(0),
+        activation: act(1.0),
+        source: None,
+    }];
+
+    // Tag sets: nodes 0 and 3 share tags, creating dynamic affinity
+    let tag_sets = vec![
+        vec![TagId::new(1), TagId::new(2), TagId::new(3)],
+        vec![TagId::new(10)],
+        vec![TagId::new(11)],
+        vec![TagId::new(1), TagId::new(2), TagId::new(3)],
+    ];
+    let aff_config = AffinityConfig::builder()
+        .max_weight(0.5)
+        .min_jaccard(0.3)
+        .build();
+
+    let snapshots = engine
+        .activate_with_steps_and_affinity(&seeds, &config, &tag_sets, &aff_config)
+        .unwrap();
+
+    // Snapshot count = max_steps + 2 (step 0 + N steps + final)
+    assert_eq!(
+        snapshots.len(),
+        max_steps as usize + 2,
+        "Expected {} snapshots, got {}",
+        max_steps + 2,
+        snapshots.len()
+    );
+
+    // Step 0 contains only seed nodes
+    let step0 = &snapshots[0];
+    assert_eq!(step0.step, 0);
+    assert!(!step0.is_final);
+    assert!(
+        step0.activations.iter().all(|(n, _)| *n == NodeId::new(0)),
+        "Step 0 should only contain seed node"
+    );
+
+    // Last snapshot is final
+    let last = snapshots.last().unwrap();
+    assert!(last.is_final);
+
+    // Compare with non-affinity run: node 3 should get more activation with affinity
+    let no_affinity_results = engine.activate(&seeds, &config).unwrap();
+    let with_affinity_results = engine
+        .activate_with_affinity(&seeds, &config, &tag_sets, &aff_config)
+        .unwrap();
+    let a3_without = no_affinity_results
+        .iter()
+        .find(|r| r.node == NodeId::new(3))
+        .map(|r| r.activation.get())
+        .unwrap_or(0.0);
+    let a3_with = with_affinity_results
+        .iter()
+        .find(|r| r.node == NodeId::new(3))
+        .map(|r| r.activation.get())
+        .unwrap_or(0.0);
+    assert!(
+        a3_with > a3_without,
+        "Affinity should boost node 3: with={a3_with} without={a3_without}"
+    );
+}

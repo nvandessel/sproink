@@ -2,6 +2,14 @@
 //!
 //! All functions use opaque pointer handles and catch panics at the boundary,
 //! returning null pointers on failure.
+//!
+//! # Thread Safety
+//!
+//! - `SproinkGraph` is `Send + Sync` — safe to share across threads after construction.
+//! - `SproinkResults` and `SproinkPairs` are NOT thread-safe — each must be
+//!   accessed from a single thread at a time.
+//! - Free functions (`sproink_*_free`) must be called exactly once per allocation.
+//!   Double-free is undefined behavior.
 
 use std::collections::HashSet;
 
@@ -41,6 +49,11 @@ fn edge_kind_from_u8(v: u8) -> Option<EdgeKind> {
 ///
 /// Returns a heap-allocated `SproinkGraph` pointer, or null on failure.
 /// Free with [`sproink_graph_free()`].
+///
+/// # Resource Usage
+///
+/// Memory scales as O(num_nodes + num_edges). For very large `num_nodes`
+/// values (e.g., > 10M), expect significant memory allocation.
 ///
 /// # Safety
 ///
@@ -100,6 +113,7 @@ pub unsafe extern "C" fn sproink_graph_build(
 ///
 /// - `graph` must be a pointer returned by `sproink_graph_build()`, or null.
 /// - Must not be called more than once on the same pointer.
+///   Passing a previously-freed pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
     if !graph.is_null() {
@@ -113,6 +127,18 @@ pub unsafe extern "C" fn sproink_graph_free(graph: *mut SproinkGraph) {
 ///
 /// Returns a heap-allocated `SproinkResults` pointer, or null on failure.
 /// Free with [`sproink_results_free()`].
+///
+/// # Resource Usage
+///
+/// - Memory: O(num_nodes) for activation arrays. For graphs above 1024 nodes,
+///   parallel execution allocates O(threads × 4 × num_nodes) transient memory.
+/// - Time: O(num_nodes × num_edges × max_steps) worst case.
+///
+/// # Thread Safety
+///
+/// `SproinkGraph` is immutable after construction and may be shared across
+/// threads. However, each `sproink_activate` call must use its own
+/// `SproinkResults` — results are not thread-safe.
 ///
 /// # Safety
 ///
@@ -315,6 +341,7 @@ pub unsafe extern "C" fn sproink_results_distances(
 ///
 /// - `results` must be a pointer returned by `sproink_activate()`, or null.
 /// - Must not be called more than once on the same pointer.
+///   Passing a previously-freed pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_results_free(results: *mut SproinkResults) {
     if !results.is_null() {
@@ -469,6 +496,7 @@ pub unsafe extern "C" fn sproink_pairs_activations(
 ///
 /// - `pairs` must be a pointer returned by `sproink_extract_pairs()`, or null.
 /// - Must not be called more than once on the same pointer.
+///   Passing a previously-freed pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sproink_pairs_free(pairs: *mut SproinkPairs) {
     if !pairs.is_null() {
