@@ -18,6 +18,11 @@ typedef struct SproinkResults SproinkResults;
  * Returns a heap-allocated `SproinkGraph` pointer, or null on failure.
  * Free with [`sproink_graph_free()`].
  *
+ * # Resource Usage
+ *
+ * Memory scales as O(num_nodes + num_edges). For very large `num_nodes`
+ * values (e.g., > 10M), expect significant memory allocation.
+ *
  * # Safety
  *
  * - `sources`, `targets`, `weights`, and `kinds` must all be non-null and point
@@ -38,6 +43,7 @@ struct SproinkGraph *sproink_graph_build(uint32_t num_nodes,
  *
  * - `graph` must be a pointer returned by `sproink_graph_build()`, or null.
  * - Must not be called more than once on the same pointer.
+ *   Passing a previously-freed pointer is undefined behavior.
  */
 void sproink_graph_free(struct SproinkGraph *graph);
 
@@ -47,16 +53,34 @@ void sproink_graph_free(struct SproinkGraph *graph);
  * Returns a heap-allocated `SproinkResults` pointer, or null on failure.
  * Free with [`sproink_results_free()`].
  *
+ * # Resource Usage
+ *
+ * - Memory: O(num_nodes) for activation arrays. For graphs above 1024 nodes,
+ *   parallel execution allocates O(threads × 4 × num_nodes) transient memory.
+ * - Time: O(num_nodes × num_edges × max_steps) worst case.
+ *
+ * # Thread Safety
+ *
+ * `SproinkGraph` is immutable after construction and may be shared across
+ * threads. However, each `sproink_activate` call must use its own
+ * `SproinkResults` — results are not thread-safe.
+ *
  * # Safety
  *
  * - `graph` must be a valid pointer returned by `sproink_graph_build()`.
  * - `seed_nodes` and `seed_activations` must point to arrays of at least
  *   `num_seeds` elements, or be null when `num_seeds == 0`.
+ * - `seed_sources` may be null (all seeds get `source: None`) or must point
+ *   to an array of at least `num_seeds` elements. Use `u32::MAX` as the
+ *   "no source" sentinel for individual seeds.
+ * - `temporal_decay_rate` and `current_time` use NaN as the "not set"
+ *   sentinel, mapping to `None` in the engine config.
  */
 struct SproinkResults *sproink_activate(const struct SproinkGraph *graph,
                                         uint32_t num_seeds,
                                         const uint32_t *seed_nodes,
                                         const double *seed_activations,
+                                        const uint32_t *seed_sources,
                                         uint32_t max_steps,
                                         double decay_factor,
                                         double spread_factor,
@@ -65,7 +89,9 @@ struct SproinkResults *sproink_activate(const struct SproinkGraph *graph,
                                         double sigmoid_center,
                                         uint8_t inhibition_enabled,
                                         double inhibition_strength,
-                                        uint32_t inhibition_breadth);
+                                        uint32_t inhibition_breadth,
+                                        double temporal_decay_rate,
+                                        double current_time);
 
 /**
  * Returns the number of results, or 0 if `results` is null.
@@ -132,6 +158,7 @@ uint32_t sproink_results_distances(const struct SproinkResults *results,
  *
  * - `results` must be a pointer returned by `sproink_activate()`, or null.
  * - Must not be called more than once on the same pointer.
+ *   Passing a previously-freed pointer is undefined behavior.
  */
 void sproink_results_free(struct SproinkResults *results);
 
@@ -204,6 +231,7 @@ uint32_t sproink_pairs_activations(const struct SproinkPairs *pairs,
  *
  * - `pairs` must be a pointer returned by `sproink_extract_pairs()`, or null.
  * - Must not be called more than once on the same pointer.
+ *   Passing a previously-freed pointer is undefined behavior.
  */
 void sproink_pairs_free(struct SproinkPairs *pairs);
 
