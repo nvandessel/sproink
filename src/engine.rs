@@ -561,7 +561,7 @@ impl<G: Graph> Engine<G> {
                 continue;
             }
             // Collect existing FeatureAffinity targets to avoid double-counting.
-            let static_targets: Vec<usize> = self
+            let static_targets: std::collections::HashSet<usize> = self
                 .graph
                 .neighbors(NodeId::new(i as u32))
                 .iter()

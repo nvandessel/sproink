@@ -56,6 +56,7 @@ for r in &results {
 ### C FFI
 
 ```c
+#include <math.h>
 #include "sproink.h"
 
 uint32_t sources[] = {0, 1};

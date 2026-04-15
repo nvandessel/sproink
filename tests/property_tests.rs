@@ -31,24 +31,27 @@ fn random_edges_strategy(
     num_nodes: u32,
     max_edges: usize,
 ) -> impl Strategy<Value = Vec<EdgeInput>> {
-    prop::collection::vec(edge_strategy(num_nodes), 0..=max_edges)
+    prop::collection::vec(edge_strategy(num_nodes), 1..=max_edges)
+}
+
+/// Strategy that generates (num_nodes, edges) together so edge node IDs
+/// are always within the drawn num_nodes range.
+fn graph_strategy(
+    max_nodes: u32,
+    max_edges: usize,
+) -> impl Strategy<Value = (u32, Vec<EdgeInput>)> {
+    (2u32..max_nodes).prop_flat_map(move |n| {
+        random_edges_strategy(n, max_edges).prop_map(move |edges| (n, edges))
+    })
 }
 
 proptest! {
     /// Results must be bounded, unique, sorted, and count-limited.
     #[test]
     fn activation_bounds(
-        num_nodes in 2u32..50,
-        edges in random_edges_strategy(49, 100),
+        (num_nodes, edges) in graph_strategy(50, 100),
         num_seeds in 1usize..5,
     ) {
-        // Clamp edges to valid node range
-        let edges: Vec<EdgeInput> = edges.into_iter().filter(|e| {
-            e.source.get() < num_nodes && e.target.get() < num_nodes
-        }).collect();
-        if edges.is_empty() {
-            return Ok(());
-        }
         let graph = CsrGraph::build(num_nodes, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
@@ -92,17 +95,14 @@ proptest! {
     /// order-invariant over the input edge list.
     #[test]
     fn deterministic_output(
-        num_nodes in 2u32..20,
-        edges1 in random_edges_strategy(19, 30),
+        (num_nodes, edges_all) in graph_strategy(20, 30),
         perm_seed in 0u64..10_000,
     ) {
-        // Clamp edges to valid node range and require Positive-only for
-        // determinism (conflict/suppressive edges are also deterministic but
-        // keep the test focused).
-        let edges1: Vec<EdgeInput> = edges1.into_iter().filter(|e| {
-            e.source.get() < num_nodes && e.target.get() < num_nodes
-                && e.kind == EdgeKind::Positive
-        }).collect();
+        // Keep only Positive edges for this test (all kinds are deterministic,
+        // but Positive-only keeps the test focused).
+        let edges1: Vec<EdgeInput> = edges_all.into_iter()
+            .filter(|e| e.kind == EdgeKind::Positive)
+            .collect();
         if edges1.is_empty() {
             return Ok(());
         }
