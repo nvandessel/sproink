@@ -176,7 +176,7 @@ proptest! {
                 current_max = current_max.max(a);
             }
         }
-        // T11: verify the final distance group satisfies monotonic decay
+        // Verify the final distance group satisfies monotonic decay
         if current_max > 0.0 {
             prop_assert!(current_max <= prev_max + 1e-10,
                 "Final distance {} has activation {} > previous distance max {}",

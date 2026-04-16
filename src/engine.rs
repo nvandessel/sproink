@@ -374,12 +374,12 @@ impl<G: Graph> Engine<G> {
             None
         };
 
-        // I13: Pre-compute virtual affinity edges once instead of every step.
-        // I18: Skip node pairs that already have a static FeatureAffinity edge.
+        // Pre-compute virtual affinity edges once, deduplicating against static
+        // FeatureAffinity edges already in the graph.
         let virtual_edges =
             affinity.map(|(tag_sets, aff_config)| self.compute_virtual_edges(tag_sets, aff_config));
 
-        // I14: Pre-allocate step buffers to avoid per-step allocation.
+        // Pre-allocate step buffers; reused across iterations to avoid per-step allocation.
         let mut seq_buffers = SeqBuffers::new(n);
         let buffer_pool: Mutex<Vec<Updates>> = Mutex::new(Vec::new());
 
@@ -547,7 +547,7 @@ impl<G: Graph> Engine<G> {
     /// Pre-computes virtual affinity edges from tag similarity.
     ///
     /// Skips node pairs that already have a static [`EdgeKind::FeatureAffinity`]
-    /// edge in the graph to avoid double-counting (I18).
+    /// edge in the graph to avoid double-counting.
     fn compute_virtual_edges(
         &self,
         tag_sets: &[Vec<TagId>],
@@ -654,7 +654,7 @@ impl<G: Graph> Engine<G> {
                 }
             }
 
-            // Virtual affinity edges (pre-computed, I13)
+            // Virtual affinity edges (pre-computed once before the step loop)
             if let Some(ve) = virtual_edges {
                 let node_virtual = &ve[i];
                 let virtual_count = node_virtual.len();
@@ -761,7 +761,7 @@ impl<G: Graph> Engine<G> {
                     }
                 }
 
-                // Virtual affinity edges (pre-computed, I13)
+                // Virtual affinity edges (pre-computed once before the step loop)
                 if let Some(ve) = virtual_edges {
                     let node_virtual = &ve[i];
                     let virtual_count = node_virtual.len();

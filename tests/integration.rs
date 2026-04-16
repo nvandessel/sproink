@@ -1130,7 +1130,7 @@ fn activate_with_steps_and_affinity_produces_snapshots() {
     );
 }
 
-/// T7: Exercise the NaN/Inf guard in OjaLearner.
+/// Exercise the NaN/Inf guard in OjaLearner.
 ///
 /// With an extremely large learning rate, the Oja update formula can produce
 /// values far outside [0,1] — the guard must clamp or fall back to min_weight
