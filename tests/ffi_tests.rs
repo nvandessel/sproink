@@ -27,6 +27,7 @@ fn round_trip_graph_build_activate_results() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -36,6 +37,8 @@ fn round_trip_graph_build_activate_results() {
             1,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(!results.is_null());
 
@@ -71,6 +74,7 @@ fn null_graph_returns_null_results() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -80,6 +84,8 @@ fn null_graph_returns_null_results() {
             1,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(results.is_null());
     }
@@ -118,6 +124,7 @@ fn pairs_round_trip() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -127,6 +134,8 @@ fn pairs_round_trip() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(!results.is_null());
 
@@ -219,6 +228,7 @@ fn all_edge_kinds_via_ffi() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -228,6 +238,8 @@ fn all_edge_kinds_via_ffi() {
             1,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(!results.is_null());
         assert!(sproink_results_len(results) > 0);
@@ -260,6 +272,7 @@ fn null_output_pointers_dont_crash() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -269,6 +282,8 @@ fn null_output_pointers_dont_crash() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
 
         // Null output pointers should not crash and should write nothing.
@@ -333,6 +348,7 @@ fn activate_with_empty_seeds() {
             0,
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -342,6 +358,8 @@ fn activate_with_empty_seeds() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(!results.is_null());
         // All nodes get sigmoid(0) ≈ 0.047 which may be above min_activation
@@ -384,6 +402,7 @@ fn small_buffer_truncates_results_copy() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -393,6 +412,8 @@ fn small_buffer_truncates_results_copy() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
 
         let len = sproink_results_len(results);
@@ -521,6 +542,7 @@ fn activate_with_null_seed_pointer_returns_null() {
             1,
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -530,6 +552,8 @@ fn activate_with_null_seed_pointer_returns_null() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(
             results.is_null(),
@@ -566,6 +590,7 @@ fn extract_pairs_null_seed_pointer_returns_null() {
             1,
             seed_nodes.as_ptr(),
             seed_activations.as_ptr(),
+            std::ptr::null(),
             3,
             0.7,
             0.85,
@@ -575,6 +600,8 @@ fn extract_pairs_null_seed_pointer_returns_null() {
             0,
             0.15,
             7,
+            f64::NAN,
+            f64::NAN,
         );
         assert!(!results.is_null());
 
@@ -615,18 +642,223 @@ fn inhibition_breadth_zero_returns_null() {
             1,
             seed_nodes.as_ptr(),
             seed_acts.as_ptr(),
+            std::ptr::null(), // no seed sources
             3,
             0.7,
             0.85,
             0.01,
             10.0,
             0.3,
-            1,    // inhibition_enabled = true
-            0.15, // inhibition_strength
-            0,    // inhibition_breadth = 0 → rejected
+            1,        // inhibition_enabled = true
+            0.15,     // inhibition_strength
+            0,        // inhibition_breadth = 0 → rejected
+            f64::NAN, // temporal_decay_rate = not set
+            f64::NAN, // current_time = not set
         );
         assert!(results.is_null(), "inhibition_breadth=0 must be rejected");
 
+        sproink_graph_free(graph);
+    }
+}
+
+#[test]
+fn activate_with_temporal_decay() {
+    unsafe {
+        let sources = [0u32, 1];
+        let targets = [1u32, 2];
+        let weights = [0.8f64, 0.8];
+        let kinds = [0u8, 0];
+
+        let graph = sproink_graph_build(
+            3,
+            2,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_activations = [1.0f64];
+
+        // With temporal_decay_rate and current_time set
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_activations.as_ptr(),
+            std::ptr::null(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+            0.1, // temporal_decay_rate
+            5.0, // current_time
+        );
+        assert!(!results.is_null());
+
+        let len = sproink_results_len(results);
+        assert!(len > 0);
+        for _ in 0..len {
+            let mut act = [0.0f64];
+            sproink_results_activations(results, act.as_mut_ptr(), 1);
+            assert!((0.0..=1.0).contains(&act[0]));
+        }
+
+        sproink_results_free(results);
+        sproink_graph_free(graph);
+    }
+}
+
+#[test]
+fn activate_with_nan_temporal_params_uses_none() {
+    // NaN sentinel means "not set" — should produce the same results as
+    // calling without temporal decay.
+    unsafe {
+        let sources = [0u32, 1];
+        let targets = [1u32, 2];
+        let weights = [0.8f64, 0.8];
+        let kinds = [0u8, 0];
+
+        let graph = sproink_graph_build(
+            3,
+            2,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_activations = [1.0f64];
+
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_activations.as_ptr(),
+            std::ptr::null(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+            f64::NAN, // temporal_decay_rate = not set
+            f64::NAN, // current_time = not set
+        );
+        assert!(!results.is_null());
+        assert!(sproink_results_len(results) > 0);
+
+        sproink_results_free(results);
+        sproink_graph_free(graph);
+    }
+}
+
+#[test]
+fn activate_with_seed_sources() {
+    // Verify seed_sources are propagated through to results.
+    unsafe {
+        let sources = [0u32, 1];
+        let targets = [1u32, 2];
+        let weights = [0.8f64, 0.8];
+        let kinds = [0u8, 0];
+
+        let graph = sproink_graph_build(
+            3,
+            2,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_activations = [1.0f64];
+        let seed_sources = [42u32]; // source ID for this seed
+
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_activations.as_ptr(),
+            seed_sources.as_ptr(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+            f64::NAN,
+            f64::NAN,
+        );
+        assert!(!results.is_null());
+        assert!(sproink_results_len(results) > 0);
+
+        sproink_results_free(results);
+        sproink_graph_free(graph);
+    }
+}
+
+#[test]
+fn activate_with_max_seed_source_means_none() {
+    // u32::MAX is the "no source" sentinel.
+    unsafe {
+        let sources = [0u32];
+        let targets = [1u32];
+        let weights = [0.8f64];
+        let kinds = [0u8];
+
+        let graph = sproink_graph_build(
+            2,
+            1,
+            sources.as_ptr(),
+            targets.as_ptr(),
+            weights.as_ptr(),
+            kinds.as_ptr(),
+        );
+        assert!(!graph.is_null());
+
+        let seed_nodes = [0u32];
+        let seed_activations = [1.0f64];
+        let seed_sources = [u32::MAX]; // "no source" sentinel
+
+        let results = sproink_activate(
+            graph,
+            1,
+            seed_nodes.as_ptr(),
+            seed_activations.as_ptr(),
+            seed_sources.as_ptr(),
+            3,
+            0.7,
+            0.85,
+            0.01,
+            10.0,
+            0.3,
+            0,
+            0.15,
+            7,
+            f64::NAN,
+            f64::NAN,
+        );
+        assert!(!results.is_null());
+        assert!(sproink_results_len(results) > 0);
+
+        sproink_results_free(results);
         sproink_graph_free(graph);
     }
 }

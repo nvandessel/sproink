@@ -25,7 +25,7 @@ Sproink models associative memory as energy spreading through a weighted graph. 
 ```rust
 use sproink::*;
 
-let graph = CsrGraph::build(3, vec![
+let edges = [
     EdgeInput {
         source: NodeId::new(0), target: NodeId::new(1),
         weight: EdgeWeight::new(0.8).unwrap(),
@@ -36,7 +36,8 @@ let graph = CsrGraph::build(3, vec![
         weight: EdgeWeight::new(0.6).unwrap(),
         kind: EdgeKind::Positive, last_activated: None,
     },
-]).unwrap();
+];
+let graph = CsrGraph::build(3, &edges).unwrap();
 
 let engine = Engine::new(&graph);
 let config = PropagationConfig::builder().build(); // defaults: 3 steps, decay=0.7, spread=0.85
@@ -55,6 +56,7 @@ for r in &results {
 ### C FFI
 
 ```c
+#include <math.h>
 #include "sproink.h"
 
 uint32_t sources[] = {0, 1};
@@ -64,7 +66,7 @@ uint8_t kinds[] = {0, 0};
 
 SproinkGraph *g = sproink_graph_build(3, 2, sources, targets, weights, kinds);
 SproinkResults *r = sproink_activate(g, 1, (uint32_t[]){0}, (double[]){1.0},
-    3, 0.85, 1.0, 0.001, 5.0, 0.5, false, 0.15, 5);
+    NULL, 3, 0.85, 1.0, 0.001, 5.0, 0.5, false, 0.15, 5, NAN, NAN);
 
 uint32_t len = sproink_results_len(r);
 // ... read results ...

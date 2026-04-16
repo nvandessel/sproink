@@ -6,37 +6,53 @@ use sproink::*;
 
 use common::build_chain;
 
-fn build_random_edges(num_nodes: u32, num_edges: usize) -> Vec<EdgeInput> {
-    let mut edges = Vec::new();
-    for i in 0..num_edges {
-        let source = (i as u32) % num_nodes;
-        let target = ((i as u32) * 7 + 13) % num_nodes;
-        if source != target {
-            edges.push(EdgeInput {
-                source: NodeId::new(source),
-                target: NodeId::new(target),
-                weight: EdgeWeight::new(0.5).unwrap(),
-                kind: EdgeKind::Positive,
-                last_activated: None,
-            });
+fn edge_strategy(num_nodes: u32) -> impl Strategy<Value = EdgeInput> {
+    let kinds = prop::sample::select(vec![
+        EdgeKind::Positive,
+        EdgeKind::Conflicts,
+        EdgeKind::DirectionalSuppressive,
+        EdgeKind::FeatureAffinity,
+    ]);
+    (0..num_nodes, 0..num_nodes, kinds).prop_filter_map("source != target", |(s, t, kind)| {
+        if s == t {
+            return None;
         }
-    }
-    edges
+        Some(EdgeInput {
+            source: NodeId::new(s),
+            target: NodeId::new(t),
+            weight: EdgeWeight::new(0.5).unwrap(),
+            kind,
+            last_activated: None,
+        })
+    })
 }
 
-fn build_random_graph(num_nodes: u32, num_edges: usize) -> CsrGraph {
-    CsrGraph::build(num_nodes, &build_random_edges(num_nodes, num_edges)).unwrap()
+fn random_edges_strategy(
+    num_nodes: u32,
+    max_edges: usize,
+) -> impl Strategy<Value = Vec<EdgeInput>> {
+    prop::collection::vec(edge_strategy(num_nodes), 1..=max_edges)
+}
+
+/// Strategy that generates (num_nodes, edges) together so edge node IDs
+/// are always within the drawn num_nodes range.
+fn graph_strategy(
+    max_nodes: u32,
+    max_edges: usize,
+) -> impl Strategy<Value = (u32, Vec<EdgeInput>)> {
+    (2u32..max_nodes).prop_flat_map(move |n| {
+        random_edges_strategy(n, max_edges).prop_map(move |edges| (n, edges))
+    })
 }
 
 proptest! {
     /// Results must be bounded, unique, sorted, and count-limited.
     #[test]
     fn activation_bounds(
-        num_nodes in 2u32..50,
-        num_edges in 1usize..100,
+        (num_nodes, edges) in graph_strategy(50, 100),
         num_seeds in 1usize..5,
     ) {
-        let graph = build_random_graph(num_nodes, num_edges);
+        let graph = CsrGraph::build(num_nodes, &edges).unwrap();
         let engine = Engine::new(graph);
         let config = PropagationConfig::builder().build();
         let seeds: Vec<Seed> = (0..num_seeds)
@@ -79,11 +95,17 @@ proptest! {
     /// order-invariant over the input edge list.
     #[test]
     fn deterministic_output(
-        num_nodes in 2u32..20,
-        num_edges in 1usize..30,
+        (num_nodes, edges_all) in graph_strategy(20, 30),
         perm_seed in 0u64..10_000,
     ) {
-        let edges1 = build_random_edges(num_nodes, num_edges);
+        // Keep only Positive edges for this test (all kinds are deterministic,
+        // but Positive-only keeps the test focused).
+        let edges1: Vec<EdgeInput> = edges_all.into_iter()
+            .filter(|e| e.kind == EdgeKind::Positive)
+            .collect();
+        if edges1.is_empty() {
+            return Ok(());
+        }
         // Produce a permutation of the same edges via a seed-derived swap sequence.
         let mut edges2 = edges1.clone();
         if edges2.len() > 1 {
@@ -153,6 +175,12 @@ proptest! {
             } else {
                 current_max = current_max.max(a);
             }
+        }
+        // Verify the final distance group satisfies monotonic decay
+        if current_max > 0.0 {
+            prop_assert!(current_max <= prev_max + 1e-10,
+                "Final distance {} has activation {} > previous distance max {}",
+                current_dist, current_max, prev_max);
         }
     }
 
