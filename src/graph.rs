@@ -439,7 +439,6 @@ mod tests {
 
     #[test]
     fn edge_kind_reverse_is_public() {
-        // I26: EdgeKind::reverse() must be accessible from outside the module.
         assert_eq!(
             EdgeKind::DirectionalSuppressive.reverse(),
             EdgeKind::DirectionalPassive
