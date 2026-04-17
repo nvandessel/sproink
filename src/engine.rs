@@ -637,14 +637,18 @@ impl<G: Graph> Engine<G> {
                     EdgeKind::Conflicts => {
                         let energy = base_energy / f64::from(counts.conflict);
                         buffers.suppress_delta[j] += energy;
+                        continue;
                     }
                     EdgeKind::DirectionalSuppressive => {
                         let energy = base_energy / f64::from(counts.dir_suppress);
                         buffers.suppress_delta[j] += energy;
+                        continue;
                     }
                     EdgeKind::DirectionalPassive => continue,
                 }
 
+                // Distance/seed_source tracking follows positive connectivity
+                // only — suppressive edges carry no semantic "reach."
                 if buffers.distances_snapshot[i] != u32::MAX {
                     let candidate = buffers.distances_snapshot[i].saturating_add(1);
                     if candidate < state.distances[j] {
@@ -744,14 +748,18 @@ impl<G: Graph> Engine<G> {
                         EdgeKind::Conflicts => {
                             let energy = base_energy / f64::from(counts.conflict);
                             local.suppress_delta[j] += energy;
+                            continue;
                         }
                         EdgeKind::DirectionalSuppressive => {
                             let energy = base_energy / f64::from(counts.dir_suppress);
                             local.suppress_delta[j] += energy;
+                            continue;
                         }
                         EdgeKind::DirectionalPassive => continue,
                     }
 
+                    // Distance/seed_source tracking follows positive connectivity
+                    // only — suppressive edges carry no semantic "reach."
                     if state.distances[i] != u32::MAX {
                         let candidate = state.distances[i].saturating_add(1);
                         if candidate < local.min_distance[j] {
@@ -1115,6 +1123,122 @@ mod tests {
             a(2),
             baseline_a2
         );
+    }
+
+    #[test]
+    fn distance_ignores_suppressive_edges_sequential() {
+        // Suppressive edges must not contribute to distance/seed_source tracking.
+        // Node 2 is reachable via a Conflicts edge at hop 1 and via Positive
+        // edges at hop 2 — the recorded distance must follow the Positive path.
+        let edges = vec![
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(1),
+                weight: weight(1.0),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(2),
+                weight: weight(0.1),
+                kind: EdgeKind::Conflicts,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(1),
+                target: NodeId::new(2),
+                weight: weight(1.0),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+        ];
+        let graph = CsrGraph::build(3, &edges).unwrap();
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.001)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.3)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(42),
+        }];
+        let results = engine.activate(&seeds, &config).unwrap();
+
+        let r2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .expect("node 2 should reach nonzero activation via the Positive path");
+        assert_eq!(
+            r2.distance, 2,
+            "node 2 must record distance from the Positive path, not the shorter Conflicts path"
+        );
+        assert_eq!(
+            r2.seed_source,
+            Some(42),
+            "seed_source must propagate through the Positive path"
+        );
+    }
+
+    #[test]
+    fn distance_ignores_suppressive_edges_parallel() {
+        // Same invariant on the parallel code path. Pad the graph past
+        // PARALLEL_THRESHOLD so the parallel propagator runs.
+        const N: u32 = 1100;
+        let edges = vec![
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(1),
+                weight: weight(1.0),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(0),
+                target: NodeId::new(2),
+                weight: weight(0.1),
+                kind: EdgeKind::Conflicts,
+                last_activated: None,
+            },
+            EdgeInput {
+                source: NodeId::new(1),
+                target: NodeId::new(2),
+                weight: weight(1.0),
+                kind: EdgeKind::Positive,
+                last_activated: None,
+            },
+        ];
+        let graph = CsrGraph::build(N, &edges).unwrap();
+        let engine = Engine::new(graph);
+        let config = PropagationConfig::builder()
+            .max_steps(3)
+            .decay_factor(1.0)
+            .spread_factor(1.0)
+            .min_activation(0.001)
+            .sigmoid_gain(10.0)
+            .sigmoid_center(0.3)
+            .build();
+        let seeds = vec![Seed {
+            node: NodeId::new(0),
+            activation: act(1.0),
+            source: Some(7),
+        }];
+        let results = engine.activate(&seeds, &config).unwrap();
+
+        let r2 = results
+            .iter()
+            .find(|r| r.node == NodeId::new(2))
+            .expect("node 2 should reach nonzero activation via the Positive path");
+        assert_eq!(
+            r2.distance, 2,
+            "parallel path must record distance from the Positive path"
+        );
+        assert_eq!(r2.seed_source, Some(7));
     }
 
     #[test]
