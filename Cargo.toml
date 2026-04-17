@@ -10,7 +10,7 @@ keywords = ["spreading-activation", "graph", "csr", "memory", "ffi"]
 categories = ["algorithms", "data-structures", "science"]
 
 [lib]
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib"]
 
 [features]
 serde = ["dep:serde"]
