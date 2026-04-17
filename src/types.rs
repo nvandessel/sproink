@@ -239,7 +239,7 @@ impl fmt::Display for TagId {
 ///
 /// Each seed injects energy into a single node. The optional `source` field
 /// tags which external entity originated this seed (for provenance tracking).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Seed {
     /// The node to inject activation into.
@@ -446,6 +446,27 @@ mod tests {
         };
         assert_eq!(s.node, NodeId::new(0));
         assert_eq!(s.activation.get(), 0.8);
+    }
+
+    #[test]
+    fn seed_partial_eq() {
+        let a = Seed {
+            node: NodeId::new(3),
+            activation: Activation::new(0.5).unwrap(),
+            source: Some(7),
+        };
+        let b = Seed {
+            node: NodeId::new(3),
+            activation: Activation::new(0.5).unwrap(),
+            source: Some(7),
+        };
+        let c = Seed {
+            node: NodeId::new(3),
+            activation: Activation::new(0.5).unwrap(),
+            source: None,
+        };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 
     #[test]
