@@ -68,8 +68,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build staticlib
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build FFI artifacts
+        run: cargo rustc --release --lib --target ${{ matrix.target }} --crate-type staticlib,cdylib --features ffi
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
